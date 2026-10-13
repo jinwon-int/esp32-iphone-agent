@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:  # run by hand (e.g. on a fork, where push/PR runs start disabled)
 
 jobs:
   server:
