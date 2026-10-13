@@ -145,6 +145,9 @@ set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 | `DEVICE_KEY` | —（必填） | 板子共享密钥，与 `secrets.h` 相同，至少 16 个字符 |
 | `UI_TOKEN` | 自动生成 | 网页访问 token；不设置时自动生成并保存在 `~/.hidagent/ui_token` |
 | `AIRPLAY_PIN` | 自动生成 | 手机首次镜像时输入的 4 位配对码，保存在 `~/.hidagent/airplay_pin`；`off` 表示关闭 |
+| `SCREEN_SOURCE` | `airplay` | 屏幕来源：`airplay`（同一网络内的镜像）或 `push`（配套 iOS 应用通过 VPN 推送 JPEG 帧，见英文 README "Screen over a VPN"） |
+| `PUSH_HOST` / `PUSH_PORT` | — / `8891` | 仅 `push`：应用连接的 VPN 地址（如本机 Tailscale `100.x` 地址）和端口。必填；拒绝 `0.0.0.0` 等通配地址 |
+| `PUSH_TOKEN` | 自动生成 | 仅 `push`：应用出示的令牌；未设置时自动生成并保存在 `~/.hidagent/push_token` |
 | `HOST` / `PORT` | `0.0.0.0` / `8890` | 网页监听地址和端口（`HOST=127.0.0.1`：仅本机可访问） |
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | 板子连接的地址和端口 |
 | `HIDAGENT_DATA` | `~/.hidagent` | 校准数据、密钥和调试记录 |

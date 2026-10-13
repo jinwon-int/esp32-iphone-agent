@@ -19,6 +19,8 @@ from .gate import Gate
 from .llm import LLM
 from .phone import Phone
 from .screen import Screen
+from .screen_push import DEFAULT_PORT as PUSH_DEFAULT_PORT
+from .screen_push import PushScreen
 
 DATA_DIR = auth.private_dir(Path(os.environ.get("HIDAGENT_DATA", Path.home() / ".hidagent")))
 DEBUG = os.environ.get("HIDAGENT_DEBUG") == "1"
@@ -42,10 +44,19 @@ class _RedactToken(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(_RedactToken())
 AIRPLAY_PIN = auth.airplay_pin(DATA_DIR)
+# airplay (default): the phone mirrors to UxPlay on this network; push: the companion app sends JPEGs over the VPN
+SCREEN_SOURCE = os.environ.get("SCREEN_SOURCE", "airplay").strip().lower() or "airplay"
+if SCREEN_SOURCE not in ("airplay", "push"):
+    raise SystemExit(f"SCREEN_SOURCE must be 'airplay' or 'push', not {SCREEN_SOURCE!r}")
+PUSH_TOKEN_FROM_ENV = bool(os.environ.get("PUSH_TOKEN", "").strip())
 
 device = Device(auth.device_key())
-screen = Screen(os.environ.get("AIRPLAY_NAME", "iPhone Agent"), pin=AIRPLAY_PIN,
-                register=DATA_DIR / "uxplay.register")
+if SCREEN_SOURCE == "push":
+    screen = PushScreen(os.environ.get("PUSH_HOST", ""), int(os.environ.get("PUSH_PORT", PUSH_DEFAULT_PORT)),
+                        auth.push_token(DATA_DIR))
+else:
+    screen = Screen(os.environ.get("AIRPLAY_NAME", "iPhone Agent"), pin=AIRPLAY_PIN,
+                    register=DATA_DIR / "uxplay.register")
 phone = Phone(device, DATA_DIR / "calibration.json", screen)
 agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
               Trace(DATA_DIR / "traces" if DEBUG else None), gate=Gate.from_env(DATA_DIR))
@@ -61,7 +72,12 @@ async def lifespan(_):
         log.info("web UI: http://<this computer>:%s/?token=<your UI_TOKEN>", port)
     else:
         log.info("web UI: http://<this computer>:%s/?token=%s  (kept in %s)", port, UI_TOKEN, DATA_DIR / "ui_token")
-    log.info("AirPlay pin: %s", AIRPLAY_PIN or "off (any phone on the network may mirror to the receiver)")
+    if SCREEN_SOURCE == "push":
+        where = "<your PUSH_TOKEN>" if PUSH_TOKEN_FROM_ENV else f"{screen.token}  (kept in {DATA_DIR / 'push_token'})"
+        log.info("screen source: push -- the app connects to ws://%s:%d/ with token %s",
+                 screen.host, screen.port, where)
+    else:
+        log.info("AirPlay pin: %s", AIRPLAY_PIN or "off (any phone on the network may mirror to the receiver)")
     screen.start()
     awake = asyncio.create_task(device.keep_awake(screen=screen))
     yield
@@ -158,7 +174,7 @@ def index():
 
 @app.get("/api/status")
 def status():
-    return {"device": device.connected, "screen": screen.live, "calibrated": phone.calibrated,
+    return {"device": device.connected, "screen": screen.live, "source": SCREEN_SOURCE, "calibrated": phone.calibrated,
             "debug": DEBUG, "trace": str(agent.trace.dir or ""), "aspect": round(screen.aspect, 4),
             "gate": agent.gate.mode if agent.gate else "off",
             "models": {"planner": agent.planner.model, "actor": agent.actor.model},

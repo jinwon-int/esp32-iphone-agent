@@ -153,6 +153,9 @@ Set in `server/.env` (see [`.env.example`](server/.env.example)):
 | `DEVICE_KEY` | — (required) | Shared board key, the same as in `secrets.h`; at least 16 characters |
 | `UI_TOKEN` | generated | Web UI token; if unset, one is generated and kept in `~/.hidagent/ui_token` |
 | `AIRPLAY_PIN` | generated | 4-digit pin a phone enters once before it may mirror; kept in `~/.hidagent/airplay_pin`; `off` disables it |
+| `SCREEN_SOURCE` | `airplay` | Where the screen comes from: `airplay` (mirroring on this network) or `push` (the companion app sends it over a VPN, see "Screen over a VPN") |
+| `PUSH_HOST` / `PUSH_PORT` | — / `8891` | `push` only: the VPN address (e.g. this computer's Tailscale `100.x` address) and port the app connects to. Required; a wildcard such as `0.0.0.0` is refused |
+| `PUSH_TOKEN` | generated | `push` only: the token the app proves; if unset, one is generated and kept in `~/.hidagent/push_token` |
 | `HOST` / `PORT` | `0.0.0.0` / `8890` | Web UI address and port (`HOST=127.0.0.1`: this computer only) |
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | Address and port the board connects to |
 | `HIDAGENT_DATA` | `~/.hidagent` | Calibration, secrets and debug traces |
@@ -263,6 +266,21 @@ server/     agent, web UI, screen capture and board link (Python, FastAPI)
 - [ ] Non-ASCII text input (e.g. Chinese through the iOS pinyin keyboard)
 - [ ] More example tasks across popular apps
 
+## Screen over a VPN (`SCREEN_SOURCE=push`)
+
+AirPlay discovery is mDNS multicast and does not cross a VPN, so a phone that is not on the server's network cannot
+mirror to it. Instead, a small companion iOS app (a ReplayKit broadcast extension) encodes the screen as JPEGs a few
+times a second and sends them to the server over one WebSocket on the server's VPN address. The agent, calibration and
+web UI work exactly as with AirPlay.
+
+- Set `SCREEN_SOURCE=push`, `PUSH_HOST=<this computer's VPN address>` (a wildcard is refused: the listener must not
+  face the LAN or the internet) and start the server. It prints the push token (also kept in `~/.hidagent/push_token`).
+- In the app, enter `ws://<PUSH_HOST>:8891/` and the token, then start the broadcast from Control Center or the app.
+- Protocol, for another client: HTTP upgrade to WebSocket with `Authorization: Bearer <PUSH_TOKEN>` (never put the
+  token in the URL), then one binary message per JPEG, portrait, at most 1 MB and 15 per second. While the screen is
+  still, re-send the last JPEG unchanged or a ping every second or two: the server treats a connection that has been
+  silent for 5 s as gone. A new authenticated connection replaces the previous one.
+
 ## Limitations
 
 - iOS does not mirror some screens (passcode entry, Apple Pay, DRM video); the agent cannot see them.
@@ -287,6 +305,10 @@ The agent can do anything you can do on an unlocked phone, so access to it is gu
   to the board port cannot drive the phone or kick the real board off, and someone who intercepts the board's
   connection (e.g. ARP spoofing) and relays the handshake still cannot inject or replay commands. The link is not
   encrypted: someone on the network can read the commands, including typed text.
+- **Push screen** — the listener binds to the VPN address you give it only (a wildcard is refused), the app proves a
+  separate `PUSH_TOKEN` in the upgrade request (it lives on the phone, so it is not the UI token), a frame announcing
+  more than 1 MB closes the connection unread, non-JPEG bytes and frames over 15/s are dropped, and strangers get the
+  same short handshake window and per-address cap as on the board port. The connection is not encrypted beyond the VPN.
 - **AirPlay** — UxPlay asks a new phone for the pin, and keeps the phones that entered it in
   `~/.hidagent/uxplay.register`, so other devices on the network cannot feed the agent a fake screen. The pin is 4
   digits and fixed; whether UxPlay limits wrong guesses is not checked here, so keep the receiver on a trusted network.
