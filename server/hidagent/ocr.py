@@ -76,9 +76,10 @@ class OCR:
         if mode != "off" and not _importable():
             log.error("OCR_MODE=%s but the OCR extra cannot be imported (%s) — OCR is off", mode, import_problem())
             mode = "off"
-        elif not os.environ.get("OCR_MODE", "").strip() and import_problem() and "No module named" not in import_problem():
+        elif not os.environ.get("OCR_MODE", "").strip() and (problem := import_problem()) \
+                and "No module named" not in problem:
             # Installed but broken (typically libGL on a headless server): say so once instead of silently staying off.
-            log.warning("OCR extra is installed but cannot be imported (%s) — OCR is off", import_problem())
+            log.warning("OCR extra is installed but cannot be imported (%s) — OCR is off", problem)
         return cls(mode)
 
     @property
