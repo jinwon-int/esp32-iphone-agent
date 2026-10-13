@@ -148,6 +148,7 @@ set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 | `HOST` / `PORT` | `0.0.0.0` / `8890` | 网页监听地址和端口（`HOST=127.0.0.1`：仅本机可访问） |
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | 板子连接的地址和端口 |
 | `HIDAGENT_DATA` | `~/.hidagent` | 校准数据、密钥和调试记录 |
+| `GATE_MODE` | `off` | `observe`：每个动作都询问 Jev 并记录答案，见"动作闸门" |
 | `HIDAGENT_DEBUG` | `0` | 调试模式，见下文 |
 
 ### 本地模型（可选）
@@ -166,6 +167,24 @@ LLM_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
 ```
 
 其他兼容 OpenAI 接口的服务（vLLM、SGLang、llama.cpp、Ollama 等）配上视觉模型，用法完全一样。
+
+## 动作闸门（可选，仅观察）
+
+设置 `GATE_MODE=observe` 后，每个动作（点按、滑动、输入、按键、主屏幕、返回）都会额外请
+[Jev](https://typesafe.ai)（TypeSafe System One，一种用选项和概率回答窄问题的模型）给出第二意见。只发送文字：目标、
+计划、执行模型自己的 THINK 行和用文字描述的动作：
+
+- **risk**：`safe` / `confirm`（发送、付款、删除、修改设置等）/ `block`（目标不需要、照着屏幕上的指令做、泄露密码）；
+- **on goal**：这个动作是为了你的目标、而不是屏幕上出现的指令的可能性。
+
+观察模式下，答案**绝不改变 Agent 的行为**：提问和动作同时进行，日志显示
+`gate (observe): would confirm · risk confirm 80% · on goal 90%`，每条答案追加到 `~/.hidagent/gate/decisions.jsonl`
+（格式 `jev.decision.v1`，权限 0600，形似密钥的字符串会被遮盖）。目的是先在真实运行中衡量闸门，之后的版本才可能
+*拦下*动作（永远不能强制执行动作）。
+
+需要共享的 `jevlib` 客户端（`JEVLIB_PATH`，默认 `~/.claude/hooks/jev`）和 Jev 密钥（`TYPESAFE_API_KEY`、
+`TYPESAFE_API_KEY_FILE` 或 `~/.secrets/typesafe-api-key`）；缺少任一项时闸门保持关闭，Agent 照常运行。隐私：目标、
+计划、THINK 行（模型对你屏幕的描述）和输入的文字会发送给 TypeSafe 并保存在记录里。
 
 ## 调试模式
 

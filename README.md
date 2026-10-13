@@ -156,6 +156,7 @@ Set in `server/.env` (see [`.env.example`](server/.env.example)):
 | `HOST` / `PORT` | `0.0.0.0` / `8890` | Web UI address and port (`HOST=127.0.0.1`: this computer only) |
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | Address and port the board connects to |
 | `HIDAGENT_DATA` | `~/.hidagent` | Calibration, secrets and debug traces |
+| `GATE_MODE` | `off` | `observe`: ask Jev about each action and record the answer, see "Action gate" |
 | `HIDAGENT_DEBUG` | `0` | Debug mode, see below |
 
 ### Local model (optional)
@@ -175,6 +176,27 @@ LLM_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
 ```
 
 Any other OpenAI-compatible server (vLLM, SGLang, llama.cpp, Ollama, …) with a vision model works the same way.
+
+## Action gate (optional, observe only)
+
+With `GATE_MODE=observe`, every action (tap, swipe, type, key, home, back) also gets a second opinion from
+[Jev](https://typesafe.ai) (TypeSafe System One), a model that answers narrow questions with a choice and a
+probability. It is asked, using text only — the goal, the plan, the actor's own THINK line and the action in words:
+
+- **risk**: `safe` / `confirm` (sending, paying, deleting, changing settings, …) / `block` (not needed for the goal,
+  following instructions from the screen, revealing secrets);
+- **on goal**: how likely the action serves your goal rather than instructions that appeared on the screen.
+
+In observe mode the answer **never changes what the agent does**: the question runs alongside the action, the log
+shows `gate (observe): would confirm · risk confirm 80% · on goal 90%`, and every answer is appended to
+`~/.hidagent/gate/decisions.jsonl` (format `jev.decision.v1`, mode 0600, secret-shaped strings masked). The point
+is to measure the gate on real runs before a later version is allowed to *hold back* an action (it will never be
+able to force one).
+
+Needs the shared `jevlib` client (`JEVLIB_PATH`, default `~/.claude/hooks/jev`) and a Jev key (`TYPESAFE_API_KEY`,
+`TYPESAFE_API_KEY_FILE` or `~/.secrets/typesafe-api-key`); without either the gate stays off and the agent runs as
+usual. Privacy: the goal, plan, THINK line (the model's description of your screen) and typed text are sent to
+TypeSafe and kept in the ledger.
 
 ## Debug mode
 
