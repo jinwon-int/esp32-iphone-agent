@@ -279,7 +279,7 @@ async function poll() {
     $("summary").hidden = !steps.length;
     const actions = steps.filter((x) => x.act_s != null);
     const end = a.running ? Date.now() / 1000 : steps.at(-1)?.t;
-    const state = { done: "done", fail: "gaveUp", stopped: "stopped", error: "errorState" }[steps.at(-1)?.action];
+    const state = { done: "done", fail: "gaveUp", confirm: "confirmNeeded", stopped: "stopped", error: "errorState" }[steps.at(-1)?.action];
     $("st-state").textContent = t(a.running ? "working" : state || "idle");
     $("st-steps").textContent = actions.length;
     $("st-time").textContent = steps.length ? fmt(end - steps[0].t) : "0s";

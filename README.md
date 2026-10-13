@@ -135,6 +135,10 @@ Type a goal (for example *"Open Settings and go to Wi-Fi"*) and press **Start**,
   model's reasoning and how long thinking and acting took. Click a card to zoom in.
 - **Taps** are marked with a red ring and a spreading ripple, swipes and strokes with a yellow path; the **Motion** switch
   turns the animation off. Taps the model marked `precise` (pointer checked before tapping) are labelled in the log.
+- **Stops before anything irreversible** — paying, buying, sending, deleting the user's own items, or changing
+  account/security settings: the agent does everything up to the final review screen, then ends with
+  *Waiting for you to confirm* and says what is ready. You do the last tap. (Borrowed from
+  [iCTRL](https://github.com/OpenMinis/iCTRL)'s agent rules.)
 - **Emergency stop** (or <kbd>Esc</kbd>) stops the agent and releases the pointer. **Clear history** empties the log.
 - English and Simplified Chinese interface.
 
@@ -309,6 +313,10 @@ The agent can do anything you can do on an unlocked phone, so access to it is gu
   separate `PUSH_TOKEN` in the upgrade request (it lives on the phone, so it is not the UI token), a frame announcing
   more than 1 MB closes the connection unread, non-JPEG bytes and frames over 15/s are dropped, and strangers get the
   same short handshake window and per-address cap as on the board port. The connection is not encrypted beyond the VPN.
+- **The agent itself** — it is told never to press a final Pay / Buy / Send / Delete / Confirm button or change
+  account and security settings; it stops and asks you instead (`confirm`). That is a prompt rule, not a lock:
+  do not leave an agent unsupervised around payments, messages or anything that cannot be undone, and keep the
+  action gate's record (`GATE_MODE=observe`) when you want a second opinion on what it tried.
 - **AirPlay** — UxPlay asks a new phone for the pin, and keeps the phones that entered it in
   `~/.hidagent/uxplay.register`, so other devices on the network cannot feed the agent a fake screen. The pin is 4
   digits and fixed; whether UxPlay limits wrong guesses is not checked here, so keep the receiver on a trusted network.

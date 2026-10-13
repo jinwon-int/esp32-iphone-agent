@@ -45,12 +45,18 @@ class Frames:
             return 9 / 19.5
         return int.from_bytes(f[i + 7:i + 9], "big") / int.from_bytes(f[i + 5:i + 7], "big")
 
-    async def settled(self, quiet: float = 0.35, least: float = 0.25, most: float = 4) -> None:
-        """Wait until the screen stops changing (sources only send frames on change)."""
+    async def settled(self, quiet: float = 0.35, least: float = 0.25, most: float = 4) -> tuple[float, bool]:
+        """Wait until the screen stops changing (sources only send frames on change).
+
+        Returns ``(waited seconds, stable)``: ``stable`` is False when the wait gave up at ``most`` while frames
+        were still arriving (an animation or a loading screen), so a step can say so instead of pretending the
+        screen is final.
+        """
         started = time.time()
         await asyncio.sleep(least)
         while time.time() - self.updated < quiet and time.time() - started < most:
             await asyncio.sleep(0.1)
+        return round(time.time() - started, 2), time.time() - self.updated >= quiet
 
     async def fresh(self, since: float, timeout: float = 0.8) -> bytes | None:
         """The first frame received after `since`, or None if none arrives in time."""
