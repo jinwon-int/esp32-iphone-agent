@@ -1,4 +1,8 @@
-"""The phone's screen, received over AirPlay mirroring by UxPlay, as JPEG frames."""
+"""The phone's screen, received over AirPlay mirroring by UxPlay, as JPEG frames.
+
+`Frames` is the part every screen source shares (the latest JPEG and how the agent waits on it); `Screen` is the
+AirPlay source, `screen_push.PushScreen` the one fed by the companion iOS app over a VPN.
+"""
 
 import asyncio
 import logging
@@ -11,16 +15,62 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
-class Screen:
+class Frames:
+    """The latest JPEG of the screen and the waits the agent does on it; subclasses fill `frame`/`updated`.
+
+    The interface the agent, calibration and web UI rely on, whatever the source: `frame`, `updated`, `live`,
+    `aspect`, `settled()`, `fresh()`, `start()`, `stop()`.
+    """
+
+    def __init__(self):
+        self.frame: bytes | None = None
+        self.updated = 0.0  # time of the last *change* of frame (sources only deliver frames on change)
+
+    def start(self) -> None:
+        raise NotImplementedError
+
+    def stop(self) -> None:
+        raise NotImplementedError
+
+    @property
+    def live(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    def aspect(self) -> float:
+        """Frame width / height, read from the JPEG header (portrait iPhone as a fallback)."""
+        f = self.frame or b""
+        i = f.find(b"\xff\xc0")  # baseline start-of-frame: ... height(2) width(2)
+        if i < 0 or len(f) < i + 9:
+            return 9 / 19.5
+        return int.from_bytes(f[i + 7:i + 9], "big") / int.from_bytes(f[i + 5:i + 7], "big")
+
+    async def settled(self, quiet: float = 0.35, least: float = 0.25, most: float = 4) -> None:
+        """Wait until the screen stops changing (sources only send frames on change)."""
+        started = time.time()
+        await asyncio.sleep(least)
+        while time.time() - self.updated < quiet and time.time() - started < most:
+            await asyncio.sleep(0.1)
+
+    async def fresh(self, since: float, timeout: float = 0.8) -> bytes | None:
+        """The first frame received after `since`, or None if none arrives in time."""
+        deadline = time.time() + timeout
+        while self.updated <= since:
+            if time.time() > deadline:
+                return None
+            await asyncio.sleep(0.02)
+        return self.frame
+
+
+class Screen(Frames):
     """Runs UxPlay with a GStreamer sink that writes JPEGs into a pipe; keeps the latest one."""
 
     def __init__(self, name: str = "iPhone Agent", fps: int = 8, quality: int = 75,
                  pin: str | None = None, register: Path | None = None):
+        super().__init__()
         self.name, self.fps, self.quality = name, fps, quality
         # pin: a phone must enter it once before it may mirror; register: file of phones that did (UxPlay >= 1.68)
         self.pin, self.register = pin, register
-        self.frame: bytes | None = None
-        self.updated = 0.0
         self._proc = None
         self._clients_at, self._clients_n = 0.0, None
         self._stopping = False
@@ -90,31 +140,6 @@ class Screen:
             n = None
         self._clients_at, self._clients_n = time.time(), n
         return n
-
-    @property
-    def aspect(self) -> float:
-        """Frame width / height, read from the JPEG header (portrait iPhone as a fallback)."""
-        f = self.frame or b""
-        i = f.find(b"\xff\xc0")  # baseline start-of-frame: ... height(2) width(2)
-        if i < 0 or len(f) < i + 9:
-            return 9 / 19.5
-        return int.from_bytes(f[i + 7:i + 9], "big") / int.from_bytes(f[i + 5:i + 7], "big")
-
-    async def settled(self, quiet: float = 0.35, least: float = 0.25, most: float = 4) -> None:
-        """Wait until the screen stops changing (AirPlay only sends frames on change)."""
-        started = time.time()
-        await asyncio.sleep(least)
-        while time.time() - self.updated < quiet and time.time() - started < most:
-            await asyncio.sleep(0.1)
-
-    async def fresh(self, since: float, timeout: float = 0.8) -> bytes | None:
-        """The first frame received after `since`, or None if none arrives in time."""
-        deadline = time.time() + timeout
-        while self.updated <= since:
-            if time.time() > deadline:
-                return None
-            await asyncio.sleep(0.02)
-        return self.frame
 
     def _read(self, fd: int) -> None:
         buf = b""

@@ -1,4 +1,4 @@
-"""Shared secrets: the web UI token, the board key and the AirPlay pin.
+"""Shared secrets: the web UI token, the board key, the AirPlay pin and the push screen token.
 
 Nothing here is clever on purpose. Secrets come from the environment or, if unset, are generated once and kept in
 the data directory (readable by this user only), so they survive restarts.
@@ -112,6 +112,15 @@ def ui_token(data_dir: Path) -> str:
                    lambda t: len(t) >= MIN_UI_TOKEN)
     if len(token) < MIN_UI_TOKEN:
         raise ValueError(f"UI_TOKEN must be at least {MIN_UI_TOKEN} characters")
+    return token
+
+
+def push_token(data_dir: Path) -> str:
+    """The token the phone app proves to the push screen listener (its own secret: it lives on the phone)."""
+    token = stored("PUSH_TOKEN", data_dir / "push_token", lambda: secrets.token_urlsafe(24),
+                   lambda t: len(t) >= MIN_UI_TOKEN)
+    if len(token) < MIN_UI_TOKEN:
+        raise ValueError(f"PUSH_TOKEN must be at least {MIN_UI_TOKEN} characters")
     return token
 
 
