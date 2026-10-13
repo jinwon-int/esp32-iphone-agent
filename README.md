@@ -88,8 +88,9 @@ Use a USB-C hub with power pass-through if the phone should keep charging while 
 Install [arduino-cli](https://arduino.github.io/arduino-cli/) and the ESP32 core (3.x), then:
 
 ```bash
+python3 -c 'import secrets; print(secrets.token_hex(16))'   # a board key: put it in secrets.h AND server/.env
 cp hardware/hid_bridge/secrets.example.h hardware/hid_bridge/secrets.h
-# edit secrets.h: 2.4 GHz Wi-Fi name/password and the IP address of the computer running the server
+# edit secrets.h: 2.4 GHz Wi-Fi name/password, the IP address of the computer running the server, DEVICE_KEY
 hardware/flash.sh            # optional arguments: [serial port] [--debug]
 ```
 
@@ -103,17 +104,19 @@ sudo apt install uxplay gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstre
 
 cd server
 python3 -m venv .venv && .venv/bin/pip install -e .
-cp .env.example .env         # set LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
+cp .env.example .env         # set LLM_BASE_URL / LLM_MODEL / LLM_API_KEY and DEVICE_KEY (same as secrets.h)
 set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 ```
 
-Open `http://<computer-ip>:8890` in a browser.
+The server prints `web UI: http://<this computer>:8890/?token=…` and `AirPlay pin: nnnn`. Open that address (with the
+token) once in your browser; it remembers the token for 30 days. UxPlay 1.68 or newer is needed for the AirPlay pin.
 
 ### 3. Set up the phone (once)
 
 1. **Settings → Accessibility → Touch → AssistiveTouch**: turn it on.
 2. Plug the board into the phone. A round pointer appears; the web page shows *controller connected*.
-3. **Control Center → Screen Mirroring → iPhone Agent**. The live screen appears in the web page.
+3. **Control Center → Screen Mirroring → iPhone Agent**, and enter the AirPlay pin the server printed (only the
+   first time). The live screen appears in the web page.
 4. In the web page, open **Manual controls → Calibrate**. The server moves the pointer, finds it on the live screen
    and calibrates itself in a few seconds; if it cannot see the pointer, it asks you to click exactly on it.
 
@@ -144,8 +147,12 @@ Set in `server/.env` (see [`.env.example`](server/.env.example)):
 | `LLM_TOKEN_PARAM` | `auto` | Token-limit field: `max_tokens`, `max_completion_tokens` (newer OpenAI models), or `auto` to detect |
 | `ACTOR_*` / `PLANNER_*` | — | Per-role overrides of any `LLM_*` variable |
 | `AIRPLAY_NAME` | `iPhone Agent` | Receiver name in the phone's Screen Mirroring list |
-| `PORT` / `DEVICE_PORT` | `8890` / `7300` | Web UI port / port the board connects to |
-| `HIDAGENT_DATA` | `~/.hidagent` | Calibration and debug traces |
+| `DEVICE_KEY` | — (required) | Shared board key, the same as in `secrets.h`; at least 16 characters |
+| `UI_TOKEN` | generated | Web UI token; if unset, one is generated and kept in `~/.hidagent/ui_token` |
+| `AIRPLAY_PIN` | generated | 4-digit pin a phone enters once before it may mirror; kept in `~/.hidagent/airplay_pin`; `off` disables it |
+| `HOST` / `PORT` | `0.0.0.0` / `8890` | Web UI address and port (`HOST=127.0.0.1`: this computer only) |
+| `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | Address and port the board connects to |
+| `HIDAGENT_DATA` | `~/.hidagent` | Calibration, secrets and debug traces |
 | `HIDAGENT_DEBUG` | `0` | Debug mode, see below |
 
 ### Local model (optional)
@@ -181,8 +188,17 @@ Set `HIDAGENT_DEBUG=1` to log every board command with its latency and to save o
 
 ## Board protocol
 
-The board holds no logic. On connecting it sends `hello <last reset reason> <uptime ms>`; then the server sends one
-command per line over TCP and the board answers `ok` or `err <reason>`.
+The board holds no logic. On connecting, board and server first prove to each other that they know `DEVICE_KEY`
+(HMAC-SHA256 over fresh random nonces, so the key itself never crosses the network):
+
+```text
+board  -> hello <last reset reason> <uptime ms> <board nonce>
+server -> challenge <server nonce> <HMAC(key, "server:<board nonce>:<server nonce>")>
+board  -> auth <HMAC(key, "board:<server nonce>:<board nonce>")>
+server -> ok                       (or "err auth" and the connection is closed)
+```
+
+Then the server sends one command per line over TCP and the board answers `ok` or `err <reason>`.
 
 | Command | Effect |
 |---|---|
@@ -222,6 +238,26 @@ server/     agent, web UI, screen capture and board link (Python, FastAPI)
 - Landscape apps are not supported yet: drawings and taps there land in the wrong place.
 - On Linux machines with several network interfaces, limit Avahi (mDNS) to the interface on the phone's network
   if the phone does not list the receiver.
+
+## Security
+
+The agent can do anything you can do on an unlocked phone, so access to it is guarded:
+
+- **Web UI** — every page and API call needs the UI token (a `SameSite=Strict`, `HttpOnly` cookie set by opening
+  `/?token=…`, or an `Authorization: Bearer` header for scripts). Other web sites cannot use the cookie, which also
+  blocks CSRF and DNS-rebinding attacks. Set `HOST=127.0.0.1` if only this computer needs the page.
+- **Board link** — the server only accepts a board that proves it knows `DEVICE_KEY`, and the board only takes
+  commands from a server that proves the same. A stranger connecting to the board port cannot drive the phone or
+  kick the real board off. Commands after the handshake are not encrypted or signed: someone who can intercept and
+  alter traffic on your network (e.g. ARP spoofing) could still inject commands. Use a network you trust.
+- **AirPlay** — UxPlay asks a new phone for the pin, and keeps the phones that entered it in
+  `~/.hidagent/uxplay.register`, so other devices on the network cannot feed the agent a fake screen.
+- Secrets in `~/.hidagent` are readable by your user only. The Wi-Fi password and `DEVICE_KEY` are stored in the
+  board's flash unencrypted: treat a lost board as a leaked key and change both.
+
+Still on you: the model acts on whatever is on the screen, including text written by others (a web page or message
+can try to give it instructions). Prefer a spare phone without payment or banking apps, watch it work, and keep the
+emergency stop within reach. With a cloud model, every screenshot is sent to that provider.
 
 ## Responsible use
 

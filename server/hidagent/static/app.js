@@ -245,7 +245,9 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("zoom
 let shown = "";
 async function poll() {
   try {
-    const s = await (await fetch("/api/status")).json();
+    const r = await fetch("/api/status");
+    if (r.status === 401) { location.reload(); return; }  // token changed or cookie gone: show the token page
+    const s = await r.json();
     let ready = true;
     $("setup").querySelectorAll("li").forEach((li) => { const ok = s[li.dataset.key]; li.classList.toggle("done", ok); ready &&= ok; });
     $("setup").classList.toggle("all-done", ready);

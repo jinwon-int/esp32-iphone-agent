@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -13,8 +14,11 @@ log = logging.getLogger(__name__)
 class Screen:
     """Runs UxPlay with a GStreamer sink that writes JPEGs into a pipe; keeps the latest one."""
 
-    def __init__(self, name: str = "iPhone Agent", fps: int = 8, quality: int = 75):
+    def __init__(self, name: str = "iPhone Agent", fps: int = 8, quality: int = 75,
+                 pin: str | None = None, register: Path | None = None):
         self.name, self.fps, self.quality = name, fps, quality
+        # pin: a phone must enter it once before it may mirror; register: file of phones that did (UxPlay >= 1.68)
+        self.pin, self.register = pin, register
         self.frame: bytes | None = None
         self.updated = 0.0
         self._proc = None
@@ -33,11 +37,7 @@ class Screen:
         """Keep UxPlay running: it exits on some disconnects, so restart it every time."""
         while not self._stopping:
             read_fd, write_fd = os.pipe()
-            sink = (f"videorate drop-only=true ! video/x-raw,framerate={self.fps}/1 ! "
-                    f"jpegenc quality={self.quality} ! fdsink fd={write_fd}")
-            self._proc = subprocess.Popen(
-                ["uxplay", "-n", self.name, "-nh", "-a", "-reset", "0", "-vs", sink],
-                pass_fds=(write_fd,))  # UxPlay logs to stdout: keep them in ours
+            self._proc = subprocess.Popen(self.command(write_fd), pass_fds=(write_fd,))  # UxPlay logs to our stdout
             os.close(write_fd)
             log.info("AirPlay receiver '%s' started (pid %d)", self.name, self._proc.pid)
             self._read(read_fd)  # returns when UxPlay closes the pipe
@@ -45,6 +45,16 @@ class Screen:
             self.frame = None
             log.warning("AirPlay receiver exited (code %s), restarting", code)
             time.sleep(1)
+
+    def command(self, write_fd: int) -> list[str]:
+        sink = (f"videorate drop-only=true ! video/x-raw,framerate={self.fps}/1 ! "
+                f"jpegenc quality={self.quality} ! fdsink fd={write_fd}")
+        args = ["uxplay", "-n", self.name, "-nh", "-a", "-reset", "0", "-vs", sink]
+        if self.pin:
+            args += ["-pin", self.pin]
+            if self.register:
+                args += ["-reg", str(self.register)]
+        return args
 
     @property
     def live(self) -> bool:

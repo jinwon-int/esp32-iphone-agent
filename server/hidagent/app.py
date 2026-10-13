@@ -1,15 +1,17 @@
 """Web API + control page. Run with `python -m hidagent`."""
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import auth
 from .agent import Agent
 from .debug import Trace
 from .device import Device, DeviceError
@@ -20,9 +22,15 @@ from .screen import Screen
 DATA_DIR = Path(os.environ.get("HIDAGENT_DATA", Path.home() / ".hidagent"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DEBUG = os.environ.get("HIDAGENT_DEBUG") == "1"
+log = logging.getLogger(__name__)
 
-device = Device()
-screen = Screen(os.environ.get("AIRPLAY_NAME", "iPhone Agent"))
+UI_TOKEN = auth.ui_token(DATA_DIR)
+COOKIE = "hidagent_token"
+AIRPLAY_PIN = auth.airplay_pin(DATA_DIR)
+
+device = Device(auth.device_key())
+screen = Screen(os.environ.get("AIRPLAY_NAME", "iPhone Agent"), pin=AIRPLAY_PIN,
+                register=DATA_DIR / "uxplay.register")
 phone = Phone(device, DATA_DIR / "calibration.json", screen)
 agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
               Trace(DATA_DIR / "traces" if DEBUG else None))
@@ -30,7 +38,12 @@ agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
 
 @asynccontextmanager
 async def lifespan(_):
-    server = await device.serve("0.0.0.0", int(os.environ.get("DEVICE_PORT", 7300)))
+    if device.key is None:
+        raise SystemExit("refusing to start without a valid DEVICE_KEY (see the error above)")
+    server = await device.serve(os.environ.get("DEVICE_HOST", "0.0.0.0"), int(os.environ.get("DEVICE_PORT", 7300)))
+    log.info("web UI: http://<this computer>:%s/?token=%s  (token kept in %s or $UI_TOKEN)",
+             os.environ.get("PORT", 8890), UI_TOKEN, DATA_DIR / "ui_token")
+    log.info("AirPlay pin: %s", AIRPLAY_PIN or "off (any phone on the network may mirror to the receiver)")
     screen.start()
     awake = asyncio.create_task(device.keep_awake(screen=screen))
     yield
@@ -50,6 +63,33 @@ class Static(StaticFiles):
 
 
 app.mount("/static", Static(directory=Path(__file__).parent / "static"), name="static")
+
+LOGIN = """<!doctype html><meta charset="utf-8"><title>iPhone Agent</title>
+<body style="font:16px system-ui;max-width:36em;margin:4em auto;padding:0 1em">
+<h1>Token required</h1><p>Open the address with <code>?token=…</code> that the server printed when it started
+(<code>web UI: http://…/?token=…</code>). The token is also kept in <code>~/.hidagent/ui_token</code>.</p>"""
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    """Every page and API call needs the UI token: a cookie (set by opening /?token=…) or an Authorization header.
+
+    The cookie is SameSite=Strict, so other web sites cannot make the browser use it (no CSRF, no DNS rebinding).
+    """
+    path = request.url.path
+    if path.startswith("/static/"):  # the page's own scripts and styles: nothing secret
+        return await call_next(request)
+    if path == "/" and (given := request.query_params.get("token")) is not None and auth.same(given, UI_TOKEN):
+        response = RedirectResponse("/", status_code=303)  # drop the token from the address bar
+        response.set_cookie(COOKIE, UI_TOKEN, max_age=30 * 86400, httponly=True, samesite="strict")
+        return response
+    header = request.headers.get("authorization", "")
+    given = request.cookies.get(COOKIE) or (header[7:] if header[:7].lower() == "bearer " else "")
+    if given and auth.same(given, UI_TOKEN):
+        return await call_next(request)
+    if path == "/":
+        return HTMLResponse(LOGIN, status_code=401)
+    return JSONResponse({"detail": "unauthorized: open the web UI address with ?token=… first"}, status_code=401)
 
 
 class Point(BaseModel):

@@ -1,8 +1,17 @@
-"""TCP link to the HID bridge board (see firmware/hid_bridge)."""
+"""TCP link to the HID bridge board (see firmware/hid_bridge).
+
+Both ends prove they know DEVICE_KEY before any command is sent (see README, "Board protocol"):
+  board  -> hello <reset reason> <uptime ms> <board nonce>
+  server -> challenge <server nonce> <HMAC(key, "server:<board nonce>:<server nonce>")>
+  board  -> auth <HMAC(key, "board:<server nonce>:<board nonce>")>
+  server -> ok
+"""
 
 import asyncio
 import logging
 import time
+
+from . import auth
 
 log = logging.getLogger(__name__)
 
@@ -11,10 +20,15 @@ class DeviceError(RuntimeError):
     pass
 
 
-class Device:
-    """Accepts one board connection and sends it commands, one at a time."""
+class AuthError(RuntimeError):
+    pass
 
-    def __init__(self):
+
+class Device:
+    """Accepts one authenticated board connection and sends it commands, one at a time."""
+
+    def __init__(self, key: bytes | None = None, handshake_timeout: float = 3):
+        self.key, self.handshake_timeout = key, handshake_timeout
         self._reader = self._writer = None
         self._lock = asyncio.Lock()
         self._last = self._beat = 0.0
@@ -28,17 +42,42 @@ class Device:
         return await asyncio.start_server(self._accept, host, port)
 
     async def _accept(self, reader, writer):
-        # newer firmware greets with "hello <last reset reason> <uptime ms>": read it before any command
+        peer = writer.get_extra_info("peername")
         try:
-            hello = (await asyncio.wait_for(reader.readline(), 1)).decode().strip()
-        except (OSError, asyncio.TimeoutError):
-            hello = ""
+            hello = await asyncio.wait_for(self._handshake(reader, writer), self.handshake_timeout)
+        except (OSError, UnicodeDecodeError, asyncio.TimeoutError, AuthError) as e:
+            # a stranger (or a board with the wrong key / old firmware) never replaces the board in use
+            log.warning("board connection from %s refused: %s", peer, str(e) or type(e).__name__)
+            try:
+                writer.write(b"err auth\n")
+                writer.close()
+            except OSError:
+                pass
+            return
         if self.connected:
             self._writer.close()
         self._reader, self._writer = reader, writer
         self.links += 1
         self._last = self._beat = time.time()  # fresh link: nothing to keep awake yet
         log.info("board connected from %s %s", writer.get_extra_info("peername"), hello)
+
+    async def _handshake(self, reader, writer) -> str:
+        """Mutual challenge-response on DEVICE_KEY. Returns "<reset reason> <uptime ms>" from the board's hello."""
+        parts = (await reader.readline()).decode().split()
+        if len(parts) != 4 or parts[0] != "hello" or not auth.NONCE_RE.match(parts[3]):
+            raise AuthError("no 'hello <reason> <uptime> <nonce>' (old firmware without DEVICE_KEY?)")
+        if not self.key:
+            raise AuthError("DEVICE_KEY is not set on the server")
+        board_nonce, server_nonce = parts[3], auth.nonce()
+        writer.write(f"challenge {server_nonce} {auth.mac(self.key, 'server', board_nonce, server_nonce)}\n".encode())
+        await writer.drain()
+        reply = (await reader.readline()).decode().split()
+        expected = auth.mac(self.key, "board", server_nonce, board_nonce)
+        if len(reply) != 2 or reply[0] != "auth" or not auth.same(reply[1], expected):
+            raise AuthError("wrong DEVICE_KEY")
+        writer.write(b"ok\n")
+        await writer.drain()
+        return " ".join(parts[1:3])
 
     async def wait_connected(self, timeout: float) -> bool:
         deadline = time.time() + timeout
