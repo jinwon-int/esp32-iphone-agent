@@ -23,7 +23,10 @@ write a short numbered plan (at most 6 steps) of what to do on screen. Plain tex
 Plan only what the goal needs, from what you can see; never invent accounts, emails, logins or
 screens you have not seen. Later steps can stay general (e.g. "Draw the face on the canvas").
 To open an app, prefer search over paging through home screens: tap the "Search" pill above
-the dock (or swipe down from the middle of the home screen), type the app name, tap the result."""
+the dock (or swipe down from the middle of the home screen), type the app name, tap the result.
+If the goal involves paying or buying, sending a message or email, deleting the user's own items
+(messages, notes, photos, cart items), or changing account or security settings, plan up to the
+final review screen and end the plan with "stop for the user to confirm": the user does the last tap."""
 
 ACTOR_PROMPT = """You operate an iPhone through a mouse pointer. You see the current screen.
 Reply in this format, nothing else:
@@ -51,6 +54,9 @@ visible item. If you reached both ends of the list and the item is not there, st
 closest options you saw; do not keep scrolling.
 Only tap things you can actually see on this screenshot; never guess where a button might be.
 If you are unsure what an element does, tap it alone (one DO line) and check the result next round.
+Stop before anything that cannot be undone: never tap a final Pay, Buy, Place order, Send, Delete,
+Confirm or Sign out button, and never change account, password or security settings. Do everything
+up to that point, then reply "confirm" with what is ready; the user does the last tap.
 Actions:
   tap X Y [precise]         (precise: the pointer is located and corrected before tapping, about 1 s slower;
                              use it for small or tightly packed targets: list rows, checkmarks, toggles, small icons)
@@ -62,18 +68,22 @@ Actions:
   home | back | wait
   replan                    (the plan no longer fits the screen)
   done ANSWER               (the goal is reached; ANSWER is the result for the user)
+  confirm REASON            (the next step would pay, send, delete or change account settings: stop here
+                             and say what is ready for the user to confirm; never do that step yourself)
   fail REASON
 
 Example:
 THINK: My last tap opened the home screen as intended. The App Store icon is visible, so I tap it.
 DO: tap 152 362"""
 
-META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed", "gate")  # not the action
+META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed", "settle_s", "stable",
+        "gate")  # not the action
 
 # action name -> argument names; numeric arguments are 0-1000 screen coordinates
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
-           "type": ("text",), "key": ("combo",), "done": ("answer",), "fail": ("reason",),
+           "type": ("text",), "key": ("combo",), "done": ("answer",), "fail": ("reason",), "confirm": ("reason",),
            "home": (), "back": (), "wait": (), "replan": ()}
+TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the last step to the user
 TEXT_ARGS = ("text", "combo", "answer", "reason")
 
 
@@ -223,7 +233,7 @@ class Agent:
                 await self._replan(stuck=stuck)
                 return False
             check = None
-            if name not in ("done", "fail"):
+            if name not in TERMINAL:
                 check = self._gate_check(thought, act)  # runs alongside the action, never waited for
                 started = time.time()
                 await self._do(act)
@@ -233,18 +243,28 @@ class Agent:
             self._record(act.pop("_shot"), **act)
             if check:
                 self._attach(check, len(self.steps) - 1)
-            if name in ("done", "fail"):
+            if name in TERMINAL:
                 return True
             following = acts[i + 1]["action"] if i < len(acts) - 1 else None
             if name == "tap" and following in ("type", "key"):  # typing into a field that a missed tap never opened
-                await self.screen.settled()
+                await self._settle()
                 if not vision.changed(seen, self.screen.frame, ignore=tuple(spots)):
                     self.steps[-1]["changed"] = False
                     return False  # skip the rest; the actor looks again
-        await self.screen.settled()
+        await self._settle()
         # feedback for the next round
         self.steps[-1]["changed"] = vision.changed(seen, self.screen.frame, ignore=tuple(spots))
         return False
+
+    async def _settle(self) -> None:
+        """Wait for the screen to stop changing and note on the last step how long that took and whether it did.
+
+        Measurement only (never shown to the actor or the gate): ``settle_s`` is the wait, ``stable`` False when
+        the screen was still changing when the wait gave up, e.g. a loading screen the next decision was made on.
+        """
+        result = await self.screen.settled()
+        if isinstance(result, tuple) and self.steps:
+            self.steps[-1]["settle_s"], self.steps[-1]["stable"] = result
 
     def _gate_check(self, thought: str, act: dict) -> "asyncio.Task | None":
         if not self.gate:
@@ -294,7 +314,8 @@ class Agent:
     async def _next_actions(self) -> list[dict]:
         # actions and their effect only: echoing earlier thoughts makes the model repeat them instead of looking
         # ("gate" too: in observe mode the gate's opinion must not reach the actor and change what it does)
-        hidden = ("t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed", "gate")
+        hidden = ("t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed", "settle_s",
+                  "stable", "gate")
         effect = {True: " -> screen changed", False: " -> screen did NOT change"}
         history = "\n".join(json.dumps({k: v for k, v in s.items() if k not in hidden})[:300]
                             + effect.get(s.get("changed"), "")

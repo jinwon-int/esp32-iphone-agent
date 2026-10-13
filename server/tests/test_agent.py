@@ -92,3 +92,123 @@ def test_repeating_a_move_that_keeps_changing_the_screen_is_not_stuck():
 def test_precise_tap_flag():
     assert parse_command("tap 120 640 precise") == {"action": "tap", "x": 120, "y": 640, "precise": True}
     assert "precise" not in parse_command("tap 120 640")
+
+
+# --- borrowed from iCTRL's agent rules (#9): stop before anything irreversible; settle telemetry -------------
+
+
+def test_parse_confirm_is_a_terminal_action_with_a_reason():
+    assert parse_command("confirm Cart holds 2 items; the Pay button is next") == {
+        "action": "confirm", "reason": "Cart holds 2 items; the Pay button is next"}
+    from hidagent.agent import ACTIONS, ACTOR_PROMPT, PLANNER_PROMPT, TERMINAL
+    assert "confirm" in TERMINAL and ACTIONS["confirm"] == ("reason",)
+    assert "never tap a final Pay" in ACTOR_PROMPT and "stop for the user to confirm" in PLANNER_PROMPT
+
+
+def test_confirm_ends_the_run_without_acting_or_asking_the_gate():
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+        async def settled(self):
+            return 0.3, True
+
+    class Phone:
+        taps = []
+        async def tap(self, x, y, aim=False):
+            self.taps.append((x, y))
+
+    class Actor:
+        model = "fake"
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            return ("THINK: Everything is in the cart; Pay is next.\n"
+                    "DO: confirm 2 items in the cart, total 31.90, Pay is the next tap")
+
+    class Gate:
+        mode, asked = "observe", []
+        def check(self, *a, **k):
+            self.asked.append(a)
+            return None
+
+    gate = Gate()
+    agent = Agent(phone=Phone(), screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None), gate=gate)
+    agent.task = "buy the two items"
+    assert asyncio.run(agent._step()) is True
+    assert agent.steps[-1]["action"] == "confirm" and agent.steps[-1]["reason"].startswith("2 items")
+    assert Phone.taps == [] and gate.asked == []  # nothing was tapped and the gate was not asked about a non-action
+
+
+def test_settle_telemetry_is_recorded_but_hidden_from_the_actor_and_the_action_key(monkeypatch):
+    import asyncio
+
+    from hidagent.agent import Agent, _key
+    from hidagent.debug import Trace
+
+    monkeypatch.setattr("hidagent.agent.vision.changed", lambda *a, **k: True)  # frames here are not real JPEGs
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+        async def settled(self):
+            return 1.2, False  # still changing when the wait gave up
+
+    class Phone:
+        async def tap(self, x, y, aim=False):
+            pass
+
+    class Actor:
+        model = "fake"
+        prompts = []
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            self.prompts.append(text)
+            return "THINK: tap it\nDO: tap 100 200"
+
+    agent = Agent(phone=Phone(), screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None))
+    agent.task = "t"
+    asyncio.run(agent._step())
+    step = agent.steps[-1]
+    assert step["settle_s"] == 1.2 and step["stable"] is False and "changed" in step
+    assert _key(step) == {"action": "tap", "x": 100, "y": 200}
+    asyncio.run(agent._next_actions())
+    assert "settle_s" not in Actor.prompts[-1] and "stable" not in Actor.prompts[-1]
+
+
+def test_settle_tolerates_a_screen_that_returns_nothing():
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+        async def settled(self):
+            return None
+
+    agent = Agent(phone=None, screen=Screen(), actor=None, planner=None, trace=Trace(None))
+    agent.steps = [{"action": "tap", "x": 1, "y": 2}]
+    asyncio.run(agent._settle())
+    assert "settle_s" not in agent.steps[-1]
+
+
+def test_frames_settled_reports_wait_and_stability():
+    import asyncio
+    import time
+
+    from hidagent.screen import Screen
+
+    quiet = Screen("Agent")  # never updated: already still
+    waited, stable = asyncio.run(quiet.settled(quiet=0.05, least=0.0, most=0.5))
+    assert stable is True and waited < 0.3
+    busy = Screen("Agent")
+
+    async def keep_changing():
+        task = asyncio.ensure_future(busy.settled(quiet=0.2, least=0.0, most=0.3))
+        for _ in range(5):
+            busy.updated = time.time()
+            await asyncio.sleep(0.05)
+        return await task
+
+    waited, stable = asyncio.run(keep_changing())
+    assert stable is False and waited >= 0.3
