@@ -1,0 +1,140 @@
+"""The HTTP surface an outside agent uses: the manual at /api/skill and the action report (#9, after iCTRL)."""
+
+import asyncio
+import io
+import os
+import re
+
+import pytest
+from PIL import Image
+
+
+@pytest.fixture(scope="module")
+def web(tmp_path_factory):
+    """The app imported with a throw-away data dir and known secrets (no lifespan: no board, no UxPlay)."""
+    data = tmp_path_factory.mktemp("hidagent")
+    os.environ.update({"HIDAGENT_DATA": str(data), "DEVICE_KEY": "0123456789abcdef0123456789abcdef",
+                       "UI_TOKEN": "test-ui-token-0123456789", "SCREEN_SOURCE": "airplay"})
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    import hidagent.app as app_module
+    importlib.reload(app_module)
+    client = TestClient(app_module.app)
+    client.headers.update({"Authorization": "Bearer test-ui-token-0123456789"})
+    return app_module, client
+
+
+def jpeg(color: tuple[int, int, int], size=(90, 195)) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", size, color).save(out, format="JPEG", quality=80)
+    return out.getvalue()
+
+
+def test_skill_needs_the_token_and_reads_as_a_skill_file(web):
+    module, client = web
+    anonymous = client.get("/api/skill", headers={"Authorization": ""})
+    assert anonymous.status_code == 401
+    r = client.get("/api/skill")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/markdown")
+    text = r.text
+    assert text.startswith("---\nname: iphone-agent-control\n")
+    for heading in ("## Access", "## Coordinates", "## Actions", "## Rules", "## The built-in agent", "## Limits"):
+        assert heading in text, heading
+    assert "Authorization: Bearer" in text and "fractions of the screenshot" in text
+    assert "Never press a final" in text  # the irreversible-action rule is in the manual too
+
+
+def test_skill_mentions_every_action_route_the_app_serves(web):
+    module, client = web
+    manual = client.get("/api/skill").text
+    posts = {r.path for r in module.app.routes if "POST" in getattr(r, "methods", ()) and r.path.startswith("/api/")}
+    posts -= {"/api/raw", "/api/calibrate/finish"}  # debug-only; the finish click is a web-UI gesture
+    missing = [p for p in sorted(posts) if p not in manual]
+    assert not missing, f"routes the manual does not mention: {missing}"
+    assert "/api/frame.jpg" in manual and "/api/status" in manual and "/openapi.json" in manual
+
+
+def test_actions_report_settle_and_whether_the_screen_changed(web, monkeypatch):
+    module, client = web
+    frames = {"now": jpeg((20, 20, 20))}
+    taps: list[tuple[float, float]] = []
+
+    class FakeScreen:
+        live, aspect = True, 90 / 195
+        @property
+        def frame(self):
+            return frames["now"]
+        async def settled(self):
+            return 0.42, True
+
+    class FakePhone:
+        async def tap(self, x, y, aim=False):
+            taps.append((x, y))
+            frames["now"] = frames.get("after", frames["now"])
+        async def swipe(self, x1, y1, x2, y2):
+            pass
+
+    monkeypatch.setattr(module, "screen", FakeScreen())
+    monkeypatch.setattr(module, "phone", FakePhone())
+
+    # The tap changes nothing: the report says so (and the pointer spot itself is masked out).
+    r = client.post("/api/tap", json={"x": 0.5, "y": 0.4})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "settle": {"waited_s": 0.42, "stable": True}, "screen_changed": False}
+    assert taps == [(0.5, 0.4)]
+
+    # A tap that opens something: the frame differs afterwards.
+    frames["after"] = jpeg((230, 230, 230))
+    r = client.post("/api/tap", json={"x": 0.5, "y": 0.4})
+    assert r.json()["screen_changed"] is True and r.json()["ok"] is True
+
+    # Swipes report the same shape.
+    r = client.post("/api/swipe", json={"x1": 0.5, "y1": 0.8, "x2": 0.5, "y2": 0.5})
+    assert set(r.json()) == {"ok", "settle", "screen_changed"}
+
+
+def test_action_without_a_live_frame_reports_unknown_change(web, monkeypatch):
+    module, client = web
+
+    class NoScreen:
+        live, aspect, frame = False, 0.46, None
+        async def settled(self):
+            return 0.25, True
+
+    class FakePhone:
+        async def go_home(self):
+            pass
+
+    monkeypatch.setattr(module, "screen", NoScreen())
+    monkeypatch.setattr(module, "phone", FakePhone())
+    r = client.post("/api/home")
+    assert r.json() == {"ok": True, "settle": {"waited_s": 0.25, "stable": True}, "screen_changed": None}
+
+
+def test_action_errors_are_409_with_the_reason(web, monkeypatch):
+    module, client = web
+    from hidagent.device import DeviceError
+
+    class FakePhone:
+        async def tap(self, x, y, aim=False):
+            raise DeviceError("board not connected")
+
+    class FakeScreen:
+        live, aspect, frame = True, 0.46, jpeg((1, 2, 3))
+        async def settled(self):
+            return 0.0, True
+
+    monkeypatch.setattr(module, "screen", FakeScreen())
+    monkeypatch.setattr(module, "phone", FakePhone())
+    r = client.post("/api/tap", json={"x": 0.1, "y": 0.1})
+    assert r.status_code == 409 and "board not connected" in r.json()["detail"]
+
+
+def test_skill_file_ships_with_the_package():
+    import importlib.resources as resources
+
+    text = resources.files("hidagent").joinpath("skill.md").read_text(encoding="utf-8")
+    assert re.search(r"^name: iphone-agent-control$", text, re.M)
+    assert asyncio.iscoroutinefunction(__import__("hidagent.app", fromlist=["act"]).act)
