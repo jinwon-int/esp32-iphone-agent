@@ -29,12 +29,13 @@ COOKIE = "hidagent_token"
 
 
 class _RedactToken(logging.Filter):
-    """Keep the token out of uvicorn's access log ("GET /?token=… HTTP/1.1")."""
+    """Keep the token out of uvicorn's access log ("GET /?token=… HTTP/1.1"), however it is spelled or encoded:
+    query strings are dropped from access log lines altogether (they carry nothing else worth keeping)."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.args:
-            record.args = tuple(auth.redact(a) if isinstance(a, str) else a for a in record.args)
-        record.msg = auth.redact(str(record.msg))
+            record.args = tuple(auth.redact_query(a) if isinstance(a, str) else a for a in record.args)
+        record.msg = auth.redact_query(str(record.msg))
         return True
 
 
@@ -93,7 +94,7 @@ def _cross_origin(request: Request) -> bool:
     if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
         return True
     origin = request.headers.get("origin")
-    return origin is not None and origin.split("://", 1)[-1] != request.headers.get("host", "")
+    return origin is not None and origin.split("://", 1)[-1].lower() != request.headers.get("host", "").lower()
 
 
 @app.middleware("http")

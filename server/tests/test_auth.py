@@ -184,16 +184,17 @@ def test_weak_ui_token_is_refused_from_env_and_replaced_in_file(tmp_path, monkey
     assert len(auth.ui_token(tmp_path)) >= auth.MIN_UI_TOKEN
 
 
-def test_token_is_redacted_from_access_log_lines():
-    """Review L5."""
+@pytest.mark.parametrize("query", [f"token={TOKEN}", f"%74oken={TOKEN}", f"a=1&token={TOKEN}"])
+def test_token_is_redacted_from_access_log_lines(query):
+    """Review L5 (+ re-review: a percent-encoded name used to slip through)."""
     import logging
 
     from hidagent.app import _RedactToken
 
     record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
-                               ("127.0.0.1:1", "GET", f"/?token={TOKEN}", "1.1", 303), None)
+                               ("127.0.0.1:1", "GET", f"/?{query}", "1.1", 303), None)
     _RedactToken().filter(record)
-    assert TOKEN not in record.getMessage() and "token=<redacted>" in record.getMessage()
+    assert TOKEN not in record.getMessage() and "/?<redacted>" in record.getMessage()
 
 
 def test_stale_cookie_does_not_block_a_good_bearer_header(app):
@@ -212,8 +213,55 @@ def test_cross_origin_changes_are_refused_even_with_the_cookie(app, headers):
     assert c.post("/api/agent/stop", headers=headers).status_code == 403
 
 
+def test_same_origin_with_mixed_case_host_is_accepted(app):
+    c = client(app, base_url="http://Hidagent.LOCAL:8890")
+    c.get("/", params={"token": TOKEN})
+    r = c.post("/api/agent/stop", headers={"Origin": "http://hidagent.local:8890"})
+    assert r.status_code == 200
+
+
 def test_same_origin_changes_are_accepted(app):
     c = client(app)
     c.get("/", params={"token": TOKEN})
     r = c.post("/api/agent/stop", headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"})
     assert r.status_code == 200
+
+
+# --- regressions from the re-review ------------------------------------------------------------------------------
+
+
+def test_fifo_in_place_of_a_secret_does_not_hang(tmp_path, monkeypatch):
+    """Re-review N3: opening a planted FIFO used to block forever."""
+    import os
+    import signal
+
+    monkeypatch.delenv("UI_TOKEN", raising=False)
+    os.mkfifo(tmp_path / "ui_token")
+    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("hung on the FIFO")))
+    signal.alarm(3)
+    try:
+        with pytest.raises(ValueError, match="not a regular file"):
+            auth.ui_token(tmp_path)
+    finally:
+        signal.alarm(0)
+
+
+def test_directory_in_place_of_a_secret_fails_without_leaking_a_descriptor(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.delenv("UI_TOKEN", raising=False)
+    (tmp_path / "ui_token").mkdir()
+    before = len(os.listdir("/proc/self/fd"))
+    with pytest.raises(ValueError, match="not a regular file"):
+        auth.ui_token(tmp_path)
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
+def test_data_dir_of_another_user_is_refused(tmp_path, monkeypatch):
+    """Re-review N4: a directory owned by someone else (maybe 0777) used to be used as is."""
+    data = tmp_path / "shared"
+    data.mkdir()
+    data.chmod(0o777)
+    monkeypatch.setattr(auth.os, "getuid", lambda: data.stat().st_uid + 1)
+    with pytest.raises(PermissionError, match="another user"):
+        auth.private_dir(data)

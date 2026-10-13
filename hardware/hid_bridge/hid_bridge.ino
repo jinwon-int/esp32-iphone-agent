@@ -259,7 +259,9 @@ void loop() {
       return;
     }
     String command = line.substring(0, sp);
+#if DEBUG_SERIAL
     unsigned long started = millis();
+#endif
     String reply = run(command);
     server.print(reply + " " + tag("reply", reply) + "\n");
     seq++;

@@ -29,17 +29,20 @@ class AuthError(RuntimeError):
 
 
 MAX_LINE = 400  # the firmware drops a line over 512 bytes (with its tag); Phone.type sends long text in pieces
-MAX_PENDING = 8  # unauthenticated connections handled at once; more are closed straight away
+MAX_PENDING = 64  # unauthenticated connections at once; past it the OLDEST is dropped, so a flood cannot keep a
+# new connection (the board answers within milliseconds) from being heard
+MAX_PENDING_PER_PEER = 2  # per source address: extra ones are closed straight away
 
 
 class Device:
     """Accepts one authenticated board connection and sends it commands, one at a time."""
 
-    def __init__(self, key: bytes | None = None, handshake_timeout: float = 3):
+    def __init__(self, key: bytes | None = None, handshake_timeout: float = 1.5):  # a real board answers in ms
         self.key, self.handshake_timeout = key, handshake_timeout
         self._reader = self._writer = None
         self._session, self._seq = b"", 0
-        self._pending = 0
+        self._pending: dict[str, int] = {}  # source address -> handshakes in progress
+        self._waiting: dict = {}  # writer of every handshake in progress, oldest first
         self._lock = asyncio.Lock()
         self._last = self._beat = 0.0
         self.links = 0  # bumped on every (re)connect, so gestures know to release and re-home
@@ -54,10 +57,14 @@ class Device:
 
     async def _accept(self, reader, writer):
         peer = writer.get_extra_info("peername")
-        if self._pending >= MAX_PENDING:  # a flood of strangers must not starve the process of sockets
-            writer.close()
+        host = peer[0] if peer else "?"
+        if self._pending.get(host, 0) >= MAX_PENDING_PER_PEER:
+            writer.close()  # one address cannot hold more than a couple of slots
             return
-        self._pending += 1
+        if len(self._waiting) >= MAX_PENDING:  # full (strangers from many addresses): drop the oldest, not the new
+            next(iter(self._waiting)).close()
+        self._pending[host] = self._pending.get(host, 0) + 1
+        self._waiting[writer] = None
         try:
             hello, session = await asyncio.wait_for(self._handshake(reader, writer), self.handshake_timeout)
         except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError, AuthError) as e:
@@ -71,7 +78,10 @@ class Device:
                 pass
             return
         finally:
-            self._pending -= 1
+            self._waiting.pop(writer, None)
+            self._pending[host] -= 1
+            if not self._pending[host]:
+                del self._pending[host]
         if self.connected:
             self._writer.close()
         self._reader, self._writer = reader, writer
@@ -136,6 +146,11 @@ class Device:
             except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError) as e:
                 writer.close()  # the board reconnects on its own within a few seconds
                 raise DeviceError(f"board link lost during '{command[:30]}': {e!r}") from e
+            except asyncio.CancelledError:
+                # e.g. the emergency stop: the reply would arrive late and be read as the next one's, so drop the
+                # link; the board releases every button when it sees that, and reconnects
+                writer.close()
+                raise
             reply, _, mark = raw.rpartition(" ")
             if raw and not auth.same(mark, auth.tag(session, "reply", seq, reply)):
                 writer.close()

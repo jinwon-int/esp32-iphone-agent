@@ -14,7 +14,7 @@ from collections import deque
 from pathlib import Path
 
 from . import vision
-from .device import Device
+from .device import Device, DeviceError
 
 log = logging.getLogger(__name__)
 
@@ -203,6 +203,8 @@ class Phone:
         await self.device.send(f"scroll {lines} 0")
 
     async def type(self, text: str, piece: int = 200) -> None:
+        if not text.isascii():  # the USB keyboard can only type ASCII; fail clearly instead of typing garbage
+            raise DeviceError("only ASCII text can be typed")
         for i in range(0, len(text), piece):  # the board takes lines of limited length
             await self.device.send(f"type {text[i:i + piece]}")
 

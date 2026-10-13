@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from hidagent import auth
-from hidagent.device import MAX_PENDING, Device, DeviceError
+from hidagent.device import MAX_PENDING_PER_PEER, Device, DeviceError
 
 
 def test_timeout_grows_with_move_distance_and_text_length():
@@ -289,16 +289,103 @@ def test_over_long_hello_is_refused_without_an_unhandled_error(caplog):
     assert "Unhandled exception" not in caplog.text and "refused" in caplog.text
 
 
-def test_too_many_pending_handshakes_are_closed_at_once():
-    """Review L2: silent strangers cannot pile up; past the cap they are closed immediately."""
+def test_too_many_pending_handshakes_from_one_peer_are_closed_at_once():
+    """Review L2: silent strangers cannot pile up; past the per-peer cap they are closed immediately."""
     async def scenario():
         device, server, port = await serve()
         device.handshake_timeout = 5
-        held = [await asyncio.open_connection("127.0.0.1", port) for _ in range(MAX_PENDING)]
+        held = [await asyncio.open_connection("127.0.0.1", port) for _ in range(MAX_PENDING_PER_PEER)]
         await asyncio.sleep(0.1)
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         assert await asyncio.wait_for(reader.read(100), 1) == b""  # closed straight away, not after 5 s
         for _, w in held:
+            w.close()
+        writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+
+
+def test_idle_strangers_cannot_lock_the_board_out():
+    """Re-review N1: 8 idle sockets used to fill every pending slot, so the real board could never reconnect."""
+    async def scenario():
+        device, server, port = await serve()
+        device.handshake_timeout = 5
+        squatters = []
+        for _ in range(12):  # the attacker keeps (re)opening idle connections from its address
+            squatters.append(await asyncio.open_connection("127.0.0.1", port))
+        await asyncio.sleep(0.1)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port, local_addr=("127.0.0.2", 0))
+        board = FakeBoard(reader, writer)
+        assert await asyncio.wait_for(board.handshake(), 2)  # the board, from its own address, still gets in
+        assert await device.wait_connected(1)
+        for _, w in squatters:
+            w.close()
+        writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_command_drops_the_link_instead_of_desynchronising():
+    """Re-review N2: a command cancelled mid-flight (emergency stop) left its late reply to be read by the next."""
+    async def scenario():
+        device, server, port = await serve()
+        board = await board_connected(port)
+
+        async def slow(command):
+            await asyncio.sleep(0.5)
+            return "ok"
+
+        async def serve_slowly():  # like board.serve, but the reply comes late
+            line = (await board.reader.readline()).decode().strip()
+            command, _, _ = line.rpartition(" ")
+            await slow(command)
+            board.writer.write(f"ok {auth.tag(board.session, 'reply', 0, 'ok')}\n".encode())
+
+        task = asyncio.create_task(serve_slowly())
+        assert await device.wait_connected(2)
+        sending = asyncio.create_task(device.send("move 500 0"))
+        await asyncio.sleep(0.1)
+        sending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await sending
+        assert not device.connected  # dropped: the board releases its buttons and reconnects with a fresh session
+        task.cancel()
+        board.writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+
+
+def test_non_ascii_text_is_refused_clearly():
+    """Re-review N5: 200 characters of UTF-8 could exceed the byte limit; the keyboard is ASCII-only anyway."""
+    from hidagent.phone import Phone
+
+    phone = Phone.__new__(Phone)
+    phone.device = None  # never reached
+    with pytest.raises(DeviceError, match="ASCII"):
+        asyncio.run(phone.type("안녕하세요"))
+
+
+def test_flood_from_many_addresses_cannot_lock_the_board_out():
+    """Re-review N1 follow-up: strangers from many addresses (2 each) filling every slot. The oldest pending
+    connection is dropped for a new one, so the board, which answers in milliseconds, still gets in."""
+    from hidagent.device import MAX_PENDING
+
+    async def scenario():
+        device, server, port = await serve()
+        device.handshake_timeout = 5
+        squatters = []
+        for i in range(MAX_PENDING // 2 + 8):
+            for _ in range(2):
+                squatters.append(await asyncio.open_connection("127.0.0.1", port, local_addr=(f"127.0.1.{i + 1}", 0)))
+        await asyncio.sleep(0.2)
+        assert len(device._waiting) <= MAX_PENDING
+        reader, writer = await asyncio.open_connection("127.0.0.1", port, local_addr=("127.0.0.2", 0))
+        assert await asyncio.wait_for(FakeBoard(reader, writer).handshake(), 2)
+        assert await device.wait_connected(1)
+        for _, w in squatters:
             w.close()
         writer.close()
         server.close()

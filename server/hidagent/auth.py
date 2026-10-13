@@ -23,9 +23,9 @@ MIN_UI_TOKEN = 16
 NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-def redact(text: str) -> str:
-    """Hide token=… values (e.g. in access log lines)."""
-    return re.sub(r"(token=)[^&\s\"]+", r"\1<redacted>", text)
+def redact_query(text: str) -> str:
+    """Replace every URL query string (?…) with ?<redacted>."""
+    return re.sub(r"\?[^\s\"]+", "?<redacted>", text)
 
 
 def same(a: str, b: str) -> bool:
@@ -48,23 +48,35 @@ def nonce() -> str:
 
 
 def private_dir(path: Path) -> Path:
-    """Create the data directory readable by this user only (and tighten an existing one we own)."""
+    """Create the data directory readable by this user only (and tighten an existing one we own).
+
+    Refuses a directory owned by someone else or writable by others: files in it (secrets, calibration, the AirPlay
+    register) could be swapped under us.
+    """
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if path.stat().st_uid == os.getuid():
-        path.chmod(0o700)
+    info = path.stat()
+    if info.st_uid != os.getuid():
+        raise PermissionError(f"{path} belongs to another user: set HIDAGENT_DATA to a directory of your own")
+    path.chmod(0o700)
     return path
 
 
 def _read_private(path: Path) -> str:
     """The file's text, after making sure it is a regular file only we can read. "" if it does not exist."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)  # a planted symlink fails here (ELOOP)
+        # O_NOFOLLOW: a planted symlink fails here (ELOOP); O_NONBLOCK: a planted FIFO cannot hang us
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return ""
-    with os.fdopen(fd) as f:
+    try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError(f"{path} is not a regular file")
         os.fchmod(fd, 0o600)
+        f = os.fdopen(fd)
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:
         return f.read().strip()
 
 
