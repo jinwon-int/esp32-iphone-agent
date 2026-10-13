@@ -198,7 +198,16 @@ board  -> auth <HMAC(key, "board:<server nonce>:<board nonce>")>
 server -> ok                       (or "err auth" and the connection is closed)
 ```
 
-Then the server sends one command per line over TCP and the board answers `ok` or `err <reason>`.
+Then the server sends one command per line over TCP and the board answers `ok` or `err <reason>`. Every line carries a
+tag tied to this connection and its position, `session = HMAC(key, "session:<board nonce>:<server nonce>")`:
+
+```text
+server -> <command> <first 32 hex digits of HMAC(session, "cmd:<n>:<command>")>
+board  -> <reply> <first 32 hex digits of HMAC(session, "reply:<n>:<reply>")>      n = 0, 1, 2, … per connection
+```
+
+A line with a missing or wrong tag (forged, replayed, reordered, or over 512 bytes) makes the board hang up without
+running it; the server drops the link on a wrong reply tag. Long text is typed in pieces of 200 characters.
 
 | Command | Effect |
 |---|---|
@@ -244,16 +253,21 @@ server/     agent, web UI, screen capture and board link (Python, FastAPI)
 The agent can do anything you can do on an unlocked phone, so access to it is guarded:
 
 - **Web UI** — every page and API call needs the UI token (a `SameSite=Strict`, `HttpOnly` cookie set by opening
-  `/?token=…`, or an `Authorization: Bearer` header for scripts). Other web sites cannot use the cookie, which also
-  blocks CSRF and DNS-rebinding attacks. Set `HOST=127.0.0.1` if only this computer needs the page.
-- **Board link** — the server only accepts a board that proves it knows `DEVICE_KEY`, and the board only takes
-  commands from a server that proves the same. A stranger connecting to the board port cannot drive the phone or
-  kick the real board off. Commands after the handshake are not encrypted or signed: someone who can intercept and
-  alter traffic on your network (e.g. ARP spoofing) could still inject commands. Use a network you trust.
+  `/?token=…`, or an `Authorization: Bearer` header for scripts; at least 16 characters). Changes (`POST`) are also
+  refused when the browser says they come from another origin (`Origin` / `Sec-Fetch-Site`), which covers other
+  ports on the same host that share the cookie. This blocks CSRF and DNS-rebinding attacks. The token is kept out of
+  the access log. Set `HOST=127.0.0.1` if only this computer needs the page.
+- **Board link** — the server only accepts a board that proves it knows `DEVICE_KEY`, the board only accepts a server
+  that proves the same, and every command and reply after that is tagged for that connection. A stranger connecting
+  to the board port cannot drive the phone or kick the real board off, and someone who intercepts the board's
+  connection (e.g. ARP spoofing) and relays the handshake still cannot inject or replay commands. The link is not
+  encrypted: someone on the network can read the commands, including typed text.
 - **AirPlay** — UxPlay asks a new phone for the pin, and keeps the phones that entered it in
-  `~/.hidagent/uxplay.register`, so other devices on the network cannot feed the agent a fake screen.
-- Secrets in `~/.hidagent` are readable by your user only. The Wi-Fi password and `DEVICE_KEY` are stored in the
-  board's flash unencrypted: treat a lost board as a leaked key and change both.
+  `~/.hidagent/uxplay.register`, so other devices on the network cannot feed the agent a fake screen. The pin is 4
+  digits and fixed; whether UxPlay limits wrong guesses is not checked here, so keep the receiver on a trusted network.
+- Secrets in `~/.hidagent` (created `0700`, files `0600`, never written through a symlink) are readable by your user
+  only. The Wi-Fi password and `DEVICE_KEY` are stored in the board's flash unencrypted: treat a lost board as a
+  leaked key and change both.
 
 Still on you: the model acts on whatever is on the screen, including text written by others (a web page or message
 can try to give it instructions). Prefer a spare phone without payment or banking apps, watch it work, and keep the

@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from hidagent import auth
-from hidagent.device import Device, DeviceError
+from hidagent.device import MAX_PENDING, Device, DeviceError
 
 
 def test_timeout_grows_with_move_distance_and_text_length():
@@ -43,25 +43,66 @@ async def serve(key: bytes | None = KEY):
     return device, server, server.sockets[0].getsockname()[1]
 
 
+def session_of(key: bytes, board_nonce: str, server_nonce: str) -> bytes:
+    return auth.mac(key, "session", board_nonce, server_nonce).encode()
+
+
+class FakeBoard:
+    """The firmware's logic in Python: handshake, then only commands with a valid tag for this session."""
+
+    def __init__(self, reader, writer, key: bytes = KEY):
+        self.reader, self.writer, self.key = reader, writer, key
+        self.session, self.seq, self.executed = b"", 0, []
+
+    async def handshake(self) -> bool:
+        board_nonce = auth.nonce()
+        self.writer.write(f"hello power-on 1234 {board_nonce}\n".encode())
+        await self.writer.drain()
+        line = (await self.reader.readline()).decode().split()
+        if len(line) != 3 or line[0] != "challenge":
+            return False
+        if not auth.same(line[2], auth.mac(self.key, "server", board_nonce, line[1])):
+            return False
+        self.writer.write(f"auth {auth.mac(self.key, 'board', line[1], board_nonce)}\n".encode())
+        await self.writer.drain()
+        if (await self.reader.readline()).strip() != b"ok":
+            return False
+        self.session, self.seq = session_of(self.key, board_nonce, line[1]), 0
+        return True
+
+    async def serve(self, reply=lambda command: "ok" if command != "bad" else "err unknown command"):
+        while line := (await self.reader.readline()).decode().strip():
+            command, _, mark = line.rpartition(" ")
+            if not self.session or not auth.same(mark, auth.tag(self.session, "cmd", self.seq, command)):
+                self.writer.close()  # hang up, never execute
+                return
+            self.executed.append(command)
+            answer = reply(command)
+            self.writer.write(f"{answer} {auth.tag(self.session, 'reply', self.seq, answer)}\n".encode())
+            await self.writer.drain()
+            self.seq += 1
+
+
+async def board_connected(port: int, key: bytes = KEY) -> FakeBoard:
+    board = FakeBoard(*await asyncio.open_connection("127.0.0.1", port), key=key)
+    assert await board.handshake()
+    return board
+
+
 def test_round_trip_with_a_fake_board():
     async def scenario():
         device, server, port = await serve()
-        reader, writer, result = await connect_board(port)
-        assert result == "ok"
-
-        async def board():  # answers every command like the firmware does
-            while line := await reader.readline():
-                writer.write(b"ok\n" if line.strip() != b"bad" else b"err unknown command\n")
-                await writer.drain()
-
-        task = asyncio.create_task(board())
+        board = await board_connected(port)
+        task = asyncio.create_task(board.serve())
         assert await device.wait_connected(2)
         await device.send("ping")
         with pytest.raises(DeviceError, match="unknown command"):
             await device.send("bad")
+        await device.send("type hello world ")  # text with spaces, even a trailing one, survives the tag
+        assert board.executed == ["ping", "bad", "type hello world "]
         assert device.links == 1
         task.cancel()
-        writer.close()
+        board.writer.close()
         server.close()
 
     asyncio.run(scenario())
@@ -135,6 +176,131 @@ def test_stranger_cannot_kick_the_board_in_use():
         assert device.connected and device.links == 1 and not device._writer.is_closing()
         stranger.close()
         board_writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+
+
+def test_relayed_handshake_gives_an_attacker_no_commands():
+    """Review M1: an attacker who captures the board's connection relays the handshake to the real server, then
+    tries to inject commands. Without the session key it cannot tag them, so the board hangs up and runs nothing."""
+    async def scenario():
+        device, server, port = await serve()
+        to_board = asyncio.Queue()  # what the "attacker" sends towards the board
+
+        class Pipe:  # the board's view of its connection: reads come from the attacker
+            async def readline(self):
+                return await to_board.get()
+
+        upstream_reader, upstream_writer = await asyncio.open_connection("127.0.0.1", port)
+        sent_by_board = []
+
+        class Tap:
+            def write(self, data):
+                sent_by_board.append(data)
+                upstream_writer.write(data)  # relay board -> real server
+
+            async def drain(self):
+                await upstream_writer.drain()
+
+            def close(self):
+                to_board.put_nowait(b"")
+
+        board = FakeBoard(Pipe(), Tap())
+
+        async def relay_server_to_board():
+            while line := await upstream_reader.readline():
+                await to_board.put(line)
+                if line.strip() == b"ok":
+                    return
+
+        relay = asyncio.create_task(relay_server_to_board())
+        assert await board.handshake()  # both sides are satisfied: the relay worked
+        await relay
+        serving = asyncio.create_task(board.serve())
+        for forged in (b"type attacker\n", b"key cmd+h " + b"0" * 32 + b"\n"):
+            await to_board.put(forged)
+        await asyncio.wait_for(serving, 2)
+        assert board.executed == []  # nothing ran
+        upstream_writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+
+
+def test_reply_with_a_wrong_tag_closes_the_link():
+    async def scenario():
+        device, server, port = await serve()
+        board = await board_connected(port)
+
+        async def forger():  # answers "ok" but tagged for the wrong sequence number (a replayed reply)
+            line = (await board.reader.readline()).decode().strip()
+            command, _, _ = line.rpartition(" ")
+            board.writer.write(f"ok {auth.tag(board.session, 'reply', 7, 'ok')}\n".encode())
+            await board.writer.drain()
+
+        task = asyncio.create_task(forger())
+        assert await device.wait_connected(2)
+        with pytest.raises(DeviceError, match="failed authentication"):
+            await device.send("ping")
+        assert not device.connected
+        await task
+        board.writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("command", ["type a\nkey cmd+h", "type a\rb", "type " + "x" * 500])
+def test_commands_cannot_smuggle_a_second_line_or_be_too_long(command):
+    with pytest.raises(DeviceError, match="single line|longer than"):
+        asyncio.run(Device(KEY).send(command))
+
+
+def test_long_text_is_typed_in_pieces():
+    from hidagent.phone import Phone
+
+    class Recorder:
+        sent = []
+
+        async def send(self, command):
+            self.sent.append(command)
+
+    phone = Phone.__new__(Phone)
+    phone.device = Recorder()
+    asyncio.run(phone.type("x" * 450))
+    assert [len(c) for c in phone.device.sent] == [205, 205, 55]
+
+
+def test_over_long_hello_is_refused_without_an_unhandled_error(caplog):
+    """Review L1: a line over the stream limit used to escape the handler with a traceback."""
+    async def scenario():
+        device, server, port = await serve()
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"hello " + b"x" * 70_000 + b"\n")  # over the old 64 KiB default too
+        await writer.drain()
+        assert await asyncio.wait_for(reader.read(100), 3) in (b"err auth\n", b"")
+        await asyncio.sleep(0.1)
+        assert not device.connected
+        writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+    assert "Unhandled exception" not in caplog.text and "refused" in caplog.text
+
+
+def test_too_many_pending_handshakes_are_closed_at_once():
+    """Review L2: silent strangers cannot pile up; past the cap they are closed immediately."""
+    async def scenario():
+        device, server, port = await serve()
+        device.handshake_timeout = 5
+        held = [await asyncio.open_connection("127.0.0.1", port) for _ in range(MAX_PENDING)]
+        await asyncio.sleep(0.1)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        assert await asyncio.wait_for(reader.read(100), 1) == b""  # closed straight away, not after 5 s
+        for _, w in held:
+            w.close()
+        writer.close()
         server.close()
 
     asyncio.run(scenario())

@@ -202,8 +202,9 @@ class Phone:
         await self.point(x, y)
         await self.device.send(f"scroll {lines} 0")
 
-    async def type(self, text: str) -> None:
-        await self.device.send(f"type {text}")
+    async def type(self, text: str, piece: int = 200) -> None:
+        for i in range(0, len(text), piece):  # the board takes lines of limited length
+            await self.device.send(f"type {text[i:i + piece]}")
 
     async def key(self, combo: str) -> None:
         await self.device.send(f"key {combo}")

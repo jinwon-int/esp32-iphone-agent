@@ -19,13 +19,26 @@ from .llm import LLM
 from .phone import Phone
 from .screen import Screen
 
-DATA_DIR = Path(os.environ.get("HIDAGENT_DATA", Path.home() / ".hidagent"))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR = auth.private_dir(Path(os.environ.get("HIDAGENT_DATA", Path.home() / ".hidagent")))
 DEBUG = os.environ.get("HIDAGENT_DEBUG") == "1"
 log = logging.getLogger(__name__)
 
 UI_TOKEN = auth.ui_token(DATA_DIR)
+UI_TOKEN_FROM_ENV = bool(os.environ.get("UI_TOKEN", "").strip())
 COOKIE = "hidagent_token"
+
+
+class _RedactToken(logging.Filter):
+    """Keep the token out of uvicorn's access log ("GET /?token=… HTTP/1.1")."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            record.args = tuple(auth.redact(a) if isinstance(a, str) else a for a in record.args)
+        record.msg = auth.redact(str(record.msg))
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactToken())
 AIRPLAY_PIN = auth.airplay_pin(DATA_DIR)
 
 device = Device(auth.device_key())
@@ -41,8 +54,11 @@ async def lifespan(_):
     if device.key is None:
         raise SystemExit("refusing to start without a valid DEVICE_KEY (see the error above)")
     server = await device.serve(os.environ.get("DEVICE_HOST", "0.0.0.0"), int(os.environ.get("DEVICE_PORT", 7300)))
-    log.info("web UI: http://<this computer>:%s/?token=%s  (token kept in %s or $UI_TOKEN)",
-             os.environ.get("PORT", 8890), UI_TOKEN, DATA_DIR / "ui_token")
+    port = os.environ.get("PORT", 8890)
+    if UI_TOKEN_FROM_ENV:  # the user chose it: no need to print it
+        log.info("web UI: http://<this computer>:%s/?token=<your UI_TOKEN>", port)
+    else:
+        log.info("web UI: http://<this computer>:%s/?token=%s  (kept in %s)", port, UI_TOKEN, DATA_DIR / "ui_token")
     log.info("AirPlay pin: %s", AIRPLAY_PIN or "off (any phone on the network may mirror to the receiver)")
     screen.start()
     awake = asyncio.create_task(device.keep_awake(screen=screen))
@@ -70,11 +86,22 @@ LOGIN = """<!doctype html><meta charset="utf-8"><title>iPhone Agent</title>
 (<code>web UI: http://…/?token=…</code>). The token is also kept in <code>~/.hidagent/ui_token</code>.</p>"""
 
 
+def _cross_origin(request: Request) -> bool:
+    """A state-changing request a browser sent on behalf of another page (even one on this host, another port)."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return False
+    if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+        return True
+    origin = request.headers.get("origin")
+    return origin is not None and origin.split("://", 1)[-1] != request.headers.get("host", "")
+
+
 @app.middleware("http")
 async def require_token(request: Request, call_next):
     """Every page and API call needs the UI token: a cookie (set by opening /?token=…) or an Authorization header.
 
-    The cookie is SameSite=Strict, so other web sites cannot make the browser use it (no CSRF, no DNS rebinding).
+    The cookie is SameSite=Strict and changes are only accepted from this page's own origin, so other pages
+    cannot drive the phone through the user's browser (no CSRF, no DNS rebinding).
     """
     path = request.url.path
     if path.startswith("/static/"):  # the page's own scripts and styles: nothing secret
@@ -83,9 +110,11 @@ async def require_token(request: Request, call_next):
         response = RedirectResponse("/", status_code=303)  # drop the token from the address bar
         response.set_cookie(COOKIE, UI_TOKEN, max_age=30 * 86400, httponly=True, samesite="strict")
         return response
+    if _cross_origin(request):
+        return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
     header = request.headers.get("authorization", "")
-    given = request.cookies.get(COOKIE) or (header[7:] if header[:7].lower() == "bearer " else "")
-    if given and auth.same(given, UI_TOKEN):
+    candidates = (request.cookies.get(COOKIE, ""), header[7:] if header[:7].lower() == "bearer " else "")
+    if any(c and auth.same(c, UI_TOKEN) for c in candidates):  # either may be right (e.g. a stale cookie + header)
         return await call_next(request)
     if path == "/":
         return HTMLResponse(LOGIN, status_code=401)

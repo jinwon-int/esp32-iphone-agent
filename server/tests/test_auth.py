@@ -71,8 +71,8 @@ def test_stored_secret_is_created_once_private_and_reused(tmp_path, monkeypatch)
     first = auth.ui_token(tmp_path)
     assert len(first) >= 32 and auth.ui_token(tmp_path) == first
     assert stat.S_IMODE((tmp_path / "ui_token").stat().st_mode) == 0o600
-    monkeypatch.setenv("UI_TOKEN", "from-env")
-    assert auth.ui_token(tmp_path) == "from-env"
+    monkeypatch.setenv("UI_TOKEN", "from-env-0123456789")
+    assert auth.ui_token(tmp_path) == "from-env-0123456789"
 
 
 def test_stored_secret_tightens_existing_file_permissions(tmp_path, monkeypatch):
@@ -98,15 +98,15 @@ def test_airplay_pin_must_be_four_digits(tmp_path, monkeypatch, value):
         auth.airplay_pin(tmp_path)
 
 
-@pytest.mark.parametrize("value", ["", "short", auth.EXAMPLE_DEVICE_KEY])
+@pytest.mark.parametrize("value", ["", "short", auth.EXAMPLE_DEVICE_KEY, "a" * 32, "abab" * 8])
 def test_unsafe_device_keys_are_rejected(monkeypatch, value):
     monkeypatch.setenv("DEVICE_KEY", value)
     assert auth.device_key() is None
 
 
 def test_device_key_is_accepted(monkeypatch):
-    monkeypatch.setenv("DEVICE_KEY", " " + "a" * 32 + " ")
-    assert auth.device_key() == b"a" * 32
+    monkeypatch.setenv("DEVICE_KEY", " 0123456789abcdef ")
+    assert auth.device_key() == b"0123456789abcdef"
 
 
 def test_mac_separates_the_two_sides():
@@ -125,3 +125,95 @@ def test_uxplay_gets_pin_and_register(tmp_path):
 def test_uxplay_without_pin_has_no_pin_flags():
     args = Screen("Agent").command(9)
     assert "-pin" not in args and "-reg" not in args
+
+
+# --- regressions from the adversarial review ---------------------------------------------------------------------
+
+
+def test_existing_secret_file_is_tightened_to_0600(tmp_path, monkeypatch):
+    """Review L3: a non-empty 0644 token file used to be reused as is."""
+    monkeypatch.delenv("UI_TOKEN", raising=False)
+    path = tmp_path / "ui_token"
+    path.write_text("k" * 32)
+    path.chmod(0o644)
+    assert auth.ui_token(tmp_path) == "k" * 32
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_secret_is_never_written_through_a_symlink(tmp_path, monkeypatch):
+    """Review L3: a dangling symlink planted at the token path used to receive the new secret."""
+    monkeypatch.delenv("UI_TOKEN", raising=False)
+    victim = tmp_path / "elsewhere"
+    (tmp_path / "ui_token").symlink_to(victim)
+    with pytest.raises(OSError):
+        auth.ui_token(tmp_path)
+    assert not victim.exists()
+
+
+def test_new_secret_file_is_never_readable_by_others(tmp_path, monkeypatch):
+    """Review L3: the secret is written to a fresh 0600 file and moved in place (no write-then-chmod window)."""
+    monkeypatch.delenv("UI_TOKEN", raising=False)
+    modes = []
+    real_replace = auth.os.replace
+
+    def spy(src, dst):
+        modes.append(stat.S_IMODE(auth.os.stat(src).st_mode))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(auth.os, "replace", spy)
+    auth.ui_token(tmp_path)
+    assert modes == [0o600]
+    assert [p.name for p in tmp_path.iterdir()] == ["ui_token"]  # no temp file left behind
+
+
+def test_data_dir_is_private(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir(mode=0o755)
+    data.chmod(0o755)
+    auth.private_dir(data)
+    assert stat.S_IMODE(data.stat().st_mode) == 0o700
+
+
+def test_weak_ui_token_is_refused_from_env_and_replaced_in_file(tmp_path, monkeypatch):
+    """Review L4."""
+    monkeypatch.setenv("UI_TOKEN", "a")
+    with pytest.raises(ValueError):
+        auth.ui_token(tmp_path)
+    monkeypatch.delenv("UI_TOKEN")
+    (tmp_path / "ui_token").write_text("1")
+    assert len(auth.ui_token(tmp_path)) >= auth.MIN_UI_TOKEN
+
+
+def test_token_is_redacted_from_access_log_lines():
+    """Review L5."""
+    import logging
+
+    from hidagent.app import _RedactToken
+
+    record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                               ("127.0.0.1:1", "GET", f"/?token={TOKEN}", "1.1", 303), None)
+    _RedactToken().filter(record)
+    assert TOKEN not in record.getMessage() and "token=<redacted>" in record.getMessage()
+
+
+def test_stale_cookie_does_not_block_a_good_bearer_header(app):
+    """Review L6."""
+    c = client(app)
+    c.cookies.set("hidagent_token", "stale")
+    assert c.get("/api/status", headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 200
+
+
+@pytest.mark.parametrize("headers", [{"Origin": "http://testserver:9999"}, {"Origin": "null"},
+                                     {"Sec-Fetch-Site": "same-site"}, {"Sec-Fetch-Site": "cross-site"}])
+def test_cross_origin_changes_are_refused_even_with_the_cookie(app, headers):
+    """Review L7: a page on another port of this host shares the SameSite cookie, so check the origin too."""
+    c = client(app)
+    c.get("/", params={"token": TOKEN})
+    assert c.post("/api/agent/stop", headers=headers).status_code == 403
+
+
+def test_same_origin_changes_are_accepted(app):
+    c = client(app)
+    c.get("/", params={"token": TOKEN})
+    r = c.post("/api/agent/stop", headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"})
+    assert r.status_code == 200

@@ -5,6 +5,10 @@ Both ends prove they know DEVICE_KEY before any command is sent (see README, "Bo
   server -> challenge <server nonce> <HMAC(key, "server:<board nonce>:<server nonce>")>
   board  -> auth <HMAC(key, "board:<server nonce>:<board nonce>")>
   server -> ok
+Then every command and reply carries a tag bound to this session and its sequence number, so a relayed handshake
+gives an attacker nothing: session = HMAC(key, "session:<board nonce>:<server nonce>"),
+  server -> <command> <HMAC(session, "cmd:<n>:<command>")[:32]>
+  board  -> <reply> <HMAC(session, "reply:<n>:<reply>")[:32]>     (n = 0, 1, 2, … within the session)
 """
 
 import asyncio
@@ -24,12 +28,18 @@ class AuthError(RuntimeError):
     pass
 
 
+MAX_LINE = 400  # the firmware drops a line over 512 bytes (with its tag); Phone.type sends long text in pieces
+MAX_PENDING = 8  # unauthenticated connections handled at once; more are closed straight away
+
+
 class Device:
     """Accepts one authenticated board connection and sends it commands, one at a time."""
 
     def __init__(self, key: bytes | None = None, handshake_timeout: float = 3):
         self.key, self.handshake_timeout = key, handshake_timeout
         self._reader = self._writer = None
+        self._session, self._seq = b"", 0
+        self._pending = 0
         self._lock = asyncio.Lock()
         self._last = self._beat = 0.0
         self.links = 0  # bumped on every (re)connect, so gestures know to release and re-home
@@ -39,30 +49,39 @@ class Device:
         return self._writer is not None and not self._writer.is_closing()
 
     async def serve(self, host: str, port: int):
-        return await asyncio.start_server(self._accept, host, port)
+        # limit: board lines are short; a longer one raises ValueError instead of buffering 64 KiB per connection
+        return await asyncio.start_server(self._accept, host, port, limit=1024)
 
     async def _accept(self, reader, writer):
         peer = writer.get_extra_info("peername")
+        if self._pending >= MAX_PENDING:  # a flood of strangers must not starve the process of sockets
+            writer.close()
+            return
+        self._pending += 1
         try:
-            hello = await asyncio.wait_for(self._handshake(reader, writer), self.handshake_timeout)
-        except (OSError, UnicodeDecodeError, asyncio.TimeoutError, AuthError) as e:
-            # a stranger (or a board with the wrong key / old firmware) never replaces the board in use
-            log.warning("board connection from %s refused: %s", peer, str(e) or type(e).__name__)
+            hello, session = await asyncio.wait_for(self._handshake(reader, writer), self.handshake_timeout)
+        except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError, AuthError) as e:
+            # a stranger (or a board with the wrong key / old firmware) never replaces the board in use;
+            # ValueError covers undecodable bytes and over-long lines
+            log.warning("board connection from %s refused: %s", peer, str(e)[:120] or type(e).__name__)
             try:
                 writer.write(b"err auth\n")
                 writer.close()
             except OSError:
                 pass
             return
+        finally:
+            self._pending -= 1
         if self.connected:
             self._writer.close()
         self._reader, self._writer = reader, writer
+        self._session, self._seq = session, 0
         self.links += 1
         self._last = self._beat = time.time()  # fresh link: nothing to keep awake yet
         log.info("board connected from %s %s", writer.get_extra_info("peername"), hello)
 
-    async def _handshake(self, reader, writer) -> str:
-        """Mutual challenge-response on DEVICE_KEY. Returns "<reset reason> <uptime ms>" from the board's hello."""
+    async def _handshake(self, reader, writer) -> tuple[str, bytes]:
+        """Mutual challenge-response on DEVICE_KEY. Returns ("<reset reason> <uptime ms>", session key)."""
         parts = (await reader.readline()).decode().split()
         if len(parts) != 4 or parts[0] != "hello" or not auth.NONCE_RE.match(parts[3]):
             raise AuthError("no 'hello <reason> <uptime> <nonce>' (old firmware without DEVICE_KEY?)")
@@ -77,7 +96,7 @@ class Device:
             raise AuthError("wrong DEVICE_KEY")
         writer.write(b"ok\n")
         await writer.drain()
-        return " ".join(parts[1:3])
+        return " ".join(parts[1:3]), auth.mac(self.key, "session", board_nonce, server_nonce).encode()
 
     async def wait_connected(self, timeout: float) -> bool:
         deadline = time.time() + timeout
@@ -99,18 +118,28 @@ class Device:
         return 5
 
     async def send(self, command: str) -> None:
+        if "\n" in command or "\r" in command:  # one line is one command: text must not smuggle in another
+            raise DeviceError("a command must be a single line")
+        if len(command.encode()) > MAX_LINE:
+            raise DeviceError(f"command longer than {MAX_LINE} bytes")
         if not self.connected:
             raise DeviceError("board not connected")
         timeout = self._timeout(command)
         async with self._lock:
+            reader, writer, session = self._reader, self._writer, self._session
+            seq, self._seq = self._seq, self._seq + 1
             started = time.time()
             try:
-                self._writer.write(command.encode() + b"\n")
-                await self._writer.drain()
-                reply = (await asyncio.wait_for(self._reader.readline(), timeout)).decode().strip()
-            except (OSError, asyncio.TimeoutError) as e:
-                self._writer.close()  # the board reconnects on its own within a few seconds
+                writer.write(f"{command} {auth.tag(session, 'cmd', seq, command)}\n".encode())
+                await writer.drain()
+                raw = (await asyncio.wait_for(reader.readline(), timeout)).decode().strip()
+            except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError) as e:
+                writer.close()  # the board reconnects on its own within a few seconds
                 raise DeviceError(f"board link lost during '{command[:30]}': {e!r}") from e
+            reply, _, mark = raw.rpartition(" ")
+            if raw and not auth.same(mark, auth.tag(session, "reply", seq, reply)):
+                writer.close()
+                raise DeviceError("board reply failed authentication: link closed")
         self._beat = time.time()  # last reply of any kind
         if command != "ping":
             self._last = self._beat  # last real command: the phone's idle time
