@@ -10,6 +10,8 @@ import time
 from . import vision
 from .debug import Trace
 from .device import DeviceError
+from .gate import Gate
+from .gate import describe as gate_describe
 from .llm import LLM
 from .phone import Phone
 from .screen import Screen
@@ -66,7 +68,7 @@ Example:
 THINK: My last tap opened the home screen as intended. The App Store icon is visible, so I tap it.
 DO: tap 152 362"""
 
-META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed")  # not part of the action
+META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed", "gate")  # not the action
 
 # action name -> argument names; numeric arguments are 0-1000 screen coordinates
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
@@ -125,9 +127,11 @@ class BlindError(RuntimeError):
 
 class Agent:
     def __init__(self, phone: Phone, screen: Screen, actor: LLM, planner: LLM, trace: Trace,
-                 max_steps: int = 40, max_failures: int = 3):
+                 max_steps: int = 40, max_failures: int = 3, gate: Gate | None = None):
         self.phone, self.screen, self.actor, self.planner = phone, screen, actor, planner
         self.trace = trace
+        self.gate = gate  # optional second opinion on each action (observe only: never changes what is done)
+        self._run = 0  # bumped per run, so a late gate answer never lands in a newer run's steps
         self.max_steps, self.max_failures = max_steps, max_failures
         self.task, self.plan, self.steps = "", "", []
         self.shots: dict[int, bytes] = {}  # step index -> screenshot the model decided on
@@ -145,6 +149,9 @@ class Agent:
             raise RuntimeError("no phone screen: start Screen Mirroring first")
         self.task, self.plan, self.steps, self.shots = task, "", [], {}
         self._pointer = (0.0, 0.0)
+        self._run += 1
+        if self.gate:
+            self.gate.new_session()
         self.trace.start(task)
         self._job = asyncio.create_task(self._run())
 
@@ -156,6 +163,7 @@ class Agent:
         if self.running:
             raise RuntimeError("stop the agent first")
         self.task, self.plan, self.steps, self.shots = "", "", [], {}
+        self._run += 1
 
     def _record(self, shot: bytes | None = None, **step) -> None:
         if shot:
@@ -207,19 +215,24 @@ class Agent:
         seen = acts[0]["_shot"]
         spots = [self._pointer]  # where the pointer was and goes: pointer moves are not screen changes
         stuck = self._repeating(acts[0])
+        thought = acts[0].get("thought", "")
         for i, act in enumerate(acts):
             name = act["action"]
             if name == "replan" or stuck:
                 self._record(act.pop("_shot"), **act)
                 await self._replan(stuck=stuck)
                 return False
+            check = None
             if name not in ("done", "fail"):
+                check = self._gate_check(thought, act)  # runs alongside the action, never waited for
                 started = time.time()
                 await self._do(act)
                 act["act_s"] = round(time.time() - started, 2)
                 spots += _pointer_path(act)
                 self._pointer = spots[-1]
             self._record(act.pop("_shot"), **act)
+            if check:
+                self._attach(check, len(self.steps) - 1)
             if name in ("done", "fail"):
                 return True
             following = acts[i + 1]["action"] if i < len(acts) - 1 else None
@@ -232,6 +245,27 @@ class Agent:
         # feedback for the next round
         self.steps[-1]["changed"] = vision.changed(seen, self.screen.frame, ignore=tuple(spots))
         return False
+
+    def _gate_check(self, thought: str, act: dict) -> "asyncio.Task | None":
+        if not self.gate:
+            return None
+        try:
+            recent = [gate_describe(s) for s in self.steps if s.get("action") in ACTIONS and "plan" not in s][-4:]
+            return self.gate.check(self.task, self.plan, thought, _key(act), recent)
+        except Exception as e:  # the gate must never break a run
+            log.warning("action gate: check not started: %s", e)
+            return None
+
+    def _attach(self, check: asyncio.Task, index: int) -> None:
+        """Put the gate's answer on the step when it arrives (the page shows it on its next poll)."""
+        run = self._run
+
+        def done(task: asyncio.Task) -> None:
+            if task.cancelled() or task.exception() or run != self._run or index >= len(self.steps):
+                return
+            self.steps[index]["gate"] = task.result()
+
+        check.add_done_callback(done)
 
     def _missed(self) -> bool:
         """The previous round changed nothing on screen, so a tap may have landed off target."""
@@ -259,7 +293,8 @@ class Agent:
 
     async def _next_actions(self) -> list[dict]:
         # actions and their effect only: echoing earlier thoughts makes the model repeat them instead of looking
-        hidden = ("t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed")
+        # ("gate" too: in observe mode the gate's opinion must not reach the actor and change what it does)
+        hidden = ("t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed", "gate")
         effect = {True: " -> screen changed", False: " -> screen did NOT change"}
         history = "\n".join(json.dumps({k: v for k, v in s.items() if k not in hidden})[:300]
                             + effect.get(s.get("changed"), "")

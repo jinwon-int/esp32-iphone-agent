@@ -15,6 +15,7 @@ from . import auth
 from .agent import Agent
 from .debug import Trace
 from .device import Device, DeviceError
+from .gate import Gate
 from .llm import LLM
 from .phone import Phone
 from .screen import Screen
@@ -47,7 +48,7 @@ screen = Screen(os.environ.get("AIRPLAY_NAME", "iPhone Agent"), pin=AIRPLAY_PIN,
                 register=DATA_DIR / "uxplay.register")
 phone = Phone(device, DATA_DIR / "calibration.json", screen)
 agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
-              Trace(DATA_DIR / "traces" if DEBUG else None))
+              Trace(DATA_DIR / "traces" if DEBUG else None), gate=Gate.from_env(DATA_DIR))
 
 
 @asynccontextmanager
@@ -159,6 +160,7 @@ def index():
 def status():
     return {"device": device.connected, "screen": screen.live, "calibrated": phone.calibrated,
             "debug": DEBUG, "trace": str(agent.trace.dir or ""), "aspect": round(screen.aspect, 4),
+            "gate": agent.gate.mode if agent.gate else "off",
             "models": {"planner": agent.planner.model, "actor": agent.actor.model},
             "agent": {"running": agent.running, "task": agent.task, "steps": agent.steps}}
 

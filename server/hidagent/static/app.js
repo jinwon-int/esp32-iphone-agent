@@ -118,7 +118,15 @@ function logLine(s) {
   const text = planText(s) || why(s);
   if (text) li.append(el("div", "why", text));
   if (times(s)) li.append(el("div", "meta", times(s)));
+  if (s.gate) li.append(el("div", "meta", gateText(s.gate)));
   return li;
+}
+
+// The action gate's opinion (observe mode: shown and recorded, never acted on).
+function gateText(g) {
+  if (g.would === "unavailable") return `gate: unavailable (${g.error || "?"})`;
+  const pct = (x) => (typeof x === "number" ? `${Math.round(x * 100)}%` : "–");
+  return `gate (observe): would ${g.would} · risk ${g.risk || "–"} ${pct(g.p)} · on goal ${pct(g.on_goal)}`;
 }
 
 // Wall card: screenshot with the action drawn on it.
