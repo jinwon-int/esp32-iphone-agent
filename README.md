@@ -164,6 +164,7 @@ Set in `server/.env` (see [`.env.example`](server/.env.example)):
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | Address and port the board connects to |
 | `HIDAGENT_DATA` | `~/.hidagent` | Calibration, secrets and debug traces |
 | `GATE_MODE` | `off` | `observe`: ask Jev about each action and record the answer, see "Action gate" |
+| `OCR_MODE` | `api` if installed | `off` · `api` (`GET /api/screen_text`) · `actor` (also added to the actor's prompt). Needs `pip install -e '.[ocr]'`, see "Screen text (OCR)" |
 | `HIDAGENT_DEBUG` | `0` | Debug mode, see below |
 
 ### Local model (optional)
@@ -217,6 +218,23 @@ token like every other call. Borrowed from [iCTRL](https://github.com/OpenMinis/
 Action calls (`/api/tap`, `/api/swipe`, `/api/scroll`, `/api/type`, `/api/key`, `/api/home`, `/api/back`) now wait
 for the screen to settle and answer `{"ok": true, "settle": {"waited_s", "stable"}, "screen_changed": bool}`, so a
 caller knows whether the tap did anything without sleeping or diffing frames itself.
+
+## Screen text (OCR, optional)
+
+The vision model sees the whole screenshot but misreads or misplaces small text — settings labels, list rows,
+web views. With the `ocr` extra the server reads the current frame with [RapidOCR](https://github.com/RapidAI/RapidOCR)
+(ONNX, CPU, about 0.5–1 s per portrait frame, models ship in the wheel) and returns each line of text with its
+centre:
+
+```bash
+.venv/bin/pip install -e '.[ocr]'          # then restart the server; OCR_MODE defaults to api
+curl -s -H "$H" "$S/api/screen_text?min_conf=0.6"
+# {"items":[{"text":"Wi-Fi","x":0.17,"y":0.47,"w":0.15,"h":0.02,"conf":0.99}, …], "count":…, "took_s":0.7, …}
+```
+
+`OCR_MODE=actor` also appends those lines (in the actor's 0-1000 coordinates) to every actor prompt, so it can aim
+at words instead of estimating — at the cost of about half a second and some tokens per step; `ocr_s` on each
+step records the cost. The gate never sees OCR output. Borrowed from iCTRL's `screen_text`.
 
 ## Debug mode
 

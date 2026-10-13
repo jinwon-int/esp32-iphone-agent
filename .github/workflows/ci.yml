@@ -21,6 +21,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
+      - run: pip install -e ".[ocr]" || echo "::warning::OCR extra not installable on this Python; OCR tests skip"
       - run: ruff check .
       - run: pytest -q
 

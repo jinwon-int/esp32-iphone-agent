@@ -77,7 +77,7 @@ THINK: My last tap opened the home screen as intended. The App Store icon is vis
 DO: tap 152 362"""
 
 META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed", "settle_s", "stable",
-        "gate")  # not the action
+        "ocr_s", "gate")  # not the action
 
 # action name -> argument names; numeric arguments are 0-1000 screen coordinates
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
@@ -137,10 +137,11 @@ class BlindError(RuntimeError):
 
 class Agent:
     def __init__(self, phone: Phone, screen: Screen, actor: LLM, planner: LLM, trace: Trace,
-                 max_steps: int = 40, max_failures: int = 3, gate: Gate | None = None):
+                 max_steps: int = 40, max_failures: int = 3, gate: Gate | None = None, ocr=None):
         self.phone, self.screen, self.actor, self.planner = phone, screen, actor, planner
         self.trace = trace
         self.gate = gate  # optional second opinion on each action (observe only: never changes what is done)
+        self.ocr = ocr  # optional: with OCR_MODE=actor the actor also gets the screen's text with coordinates
         self._run = 0  # bumped per run, so a late gate answer never lands in a newer run's steps
         self.max_steps, self.max_failures = max_steps, max_failures
         self.task, self.plan, self.steps = "", "", []
@@ -315,12 +316,20 @@ class Agent:
         # actions and their effect only: echoing earlier thoughts makes the model repeat them instead of looking
         # ("gate" too: in observe mode the gate's opinion must not reach the actor and change what it does)
         hidden = ("t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed", "settle_s",
-                  "stable", "gate")
+                  "stable", "ocr_s", "gate")
         effect = {True: " -> screen changed", False: " -> screen did NOT change"}
         history = "\n".join(json.dumps({k: v for k, v in s.items() if k not in hidden})[:300]
                             + effect.get(s.get("changed"), "")
                             for s in self.steps[-8:] if "plan" not in s) or "(none)"
-        prompt = f"Goal: {self.task}\n\nPlan:\n{self.plan}\n\nRecent actions:\n{history}\n\nNext action?"
+        prompt = f"Goal: {self.task}\n\nPlan:\n{self.plan}\n\nRecent actions:\n{history}"
+        ocr_s = None
+        if self.ocr is not None and getattr(self.ocr, "mode", "off") == "actor":
+            text = await self._screen_text()
+            ocr_s = self.ocr.last_s
+            if text:
+                prompt += ("\n\nText read from the screen (OCR; x y = centre of each line in the same 0-1000 "
+                           "coordinates; when you tap a word or a row, aim with these instead of estimating):\n" + text)
+        prompt += "\n\nNext action?"
         for attempt in range(3):  # retry unparseable replies, a little less deterministically
             reply, seconds, frame = await self._ask("actor", self.actor, ACTOR_PROMPT, prompt, 0.4 * attempt)
             try:
@@ -334,8 +343,18 @@ class Agent:
                            "time. Choose a different action (another position, a shorter swipe, or another way).")
                 continue
             acts[0]["think_s"] = seconds
+            if ocr_s is not None:
+                acts[0]["ocr_s"] = ocr_s
             return [{**a, "_shot": frame} for a in acts]  # every action is drawn on the same screenshot
         raise ValueError(f"actor gave no valid action: {reply[:200]}")
+
+    async def _screen_text(self) -> str:
+        """OCR lines for the actor's prompt, or "" when OCR fails: the actor still has the screenshot."""
+        try:
+            return self.ocr.lines(await self.ocr.read(self.screen.frame))
+        except Exception as e:  # noqa: BLE001 - an OCR hiccup must never cost the step
+            log.warning("OCR skipped: %s", str(e)[:120])
+            return ""
 
     async def _do(self, a: dict) -> None:
         p = lambda k: a[k] / 1000  # noqa: E731
