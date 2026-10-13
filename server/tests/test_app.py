@@ -162,7 +162,7 @@ def test_screen_text_is_503_when_ocr_is_off(web, monkeypatch):
     module, client = web
     monkeypatch.setattr(module, "ocr", FakeOCR("off"))
     r = client.get("/api/screen_text")
-    assert r.status_code == 503 and "pip install -e '.[ocr]'" in r.json()["detail"]
+    assert r.status_code == 503 and "pip install -e '.[ocr]'" in r.json()["detail"] and "OCR is off (" in r.json()["detail"]
 
 
 def test_screen_text_needs_a_live_screen_and_filters_by_confidence(web, monkeypatch):

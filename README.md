@@ -227,6 +227,7 @@ web views. With the `ocr` extra the server reads the current frame with [RapidOC
 centre:
 
 ```bash
+sudo apt install libgl1 libglib2.0-0       # Linux servers: OpenCV (used by RapidOCR) needs these even without a display
 .venv/bin/pip install -e '.[ocr]'          # then restart the server; OCR_MODE defaults to api
 curl -s -H "$H" "$S/api/screen_text?min_conf=0.6"
 # {"items":[{"text":"Wi-Fi","x":0.17,"y":0.47,"w":0.15,"h":0.02,"conf":0.99}, …], "count":…, "took_s":0.7, …}
@@ -235,6 +236,9 @@ curl -s -H "$H" "$S/api/screen_text?min_conf=0.6"
 `OCR_MODE=actor` also appends those lines (in the actor's 0-1000 coordinates) to every actor prompt, so it can aim
 at words instead of estimating — at the cost of about half a second and some tokens per step; `ocr_s` on each
 step records the cost. The gate never sees OCR output. Borrowed from iCTRL's `screen_text`.
+
+If `/api/screen_text` answers 503 although the extra is installed, the detail says why — on a headless Linux box it
+is almost always `libGL.so.1`, i.e. the `apt install` line above; the server also logs the reason at start-up.
 
 ## Debug mode
 

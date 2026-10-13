@@ -21,7 +21,10 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
+      # OpenCV (pulled in by rapidocr) needs libGL even headless; without it the extra installs but cannot import
+      - run: sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
       - run: pip install -e ".[ocr]" || echo "::warning::OCR extra not installable on this Python; OCR tests skip"
+      - run: python -c "from hidagent.ocr import import_problem; print('OCR import:', import_problem() or 'ok')"
       - run: ruff check .
       - run: pytest -q
 

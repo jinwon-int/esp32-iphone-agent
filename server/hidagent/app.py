@@ -214,7 +214,11 @@ def frame():
 async def screen_text(min_conf: float = 0.5):
     """Text on the current screen with the centre of each line as fractions of the frame (OCR, optional extra)."""
     if not ocr.enabled:
-        raise HTTPException(503, "OCR is off: pip install -e '.[ocr]' on the server and set OCR_MODE=api or actor")
+        from .ocr import import_problem
+
+        why = import_problem() or "OCR_MODE=off"
+        raise HTTPException(503, f"OCR is off ({why}); install the extra with pip install -e '.[ocr]', then set "
+                                 "OCR_MODE=api or actor")
     if not screen.live:
         raise HTTPException(404, "no live screen: start screen mirroring on the phone")
     frame, updated = screen.frame, screen.updated

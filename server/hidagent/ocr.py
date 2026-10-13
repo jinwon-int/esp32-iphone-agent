@@ -25,12 +25,32 @@ MAX_ITEMS = 80
 MIN_CONF = 0.5
 
 
+_import_problem: str | None | bool = False  # False = not checked yet; None = imports fine; str = why not
+
+
+def import_problem() -> str | None:
+    """Why the OCR extra cannot be imported, or None when it can (checked once).
+
+    The usual reason on a headless Linux server is not a missing package but OpenCV's shared libraries:
+    ``libGL.so.1: cannot open shared object file`` — fixed with ``apt install libgl1 libglib2.0-0``.
+    """
+    global _import_problem
+    if _import_problem is False:
+        try:
+            import rapidocr_onnxruntime  # noqa: F401
+            _import_problem = None
+        except ImportError as e:
+            reason = str(e)
+            if "libGL" in reason or "libgthread" in reason or "libglib" in reason:
+                reason += " — OpenCV needs system libraries: apt install libgl1 libglib2.0-0"
+            elif "No module named" in reason:
+                reason += " — pip install -e '.[ocr]'"
+            _import_problem = reason
+    return _import_problem
+
+
 def _importable() -> bool:
-    try:
-        import rapidocr_onnxruntime  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    return import_problem() is None
 
 
 class OCR:
@@ -54,8 +74,11 @@ class OCR:
         if not mode:
             mode = "api" if _importable() else "off"
         if mode != "off" and not _importable():
-            log.error("OCR_MODE=%s but rapidocr is not installed: pip install -e '.[ocr]' — OCR is off", mode)
+            log.error("OCR_MODE=%s but the OCR extra cannot be imported (%s) — OCR is off", mode, import_problem())
             mode = "off"
+        elif not os.environ.get("OCR_MODE", "").strip() and import_problem() and "No module named" not in import_problem():
+            # Installed but broken (typically libGL on a headless server): say so once instead of silently staying off.
+            log.warning("OCR extra is installed but cannot be imported (%s) — OCR is off", import_problem())
         return cls(mode)
 
     @property
