@@ -7,11 +7,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth
+from . import auth, vision
 from .agent import Agent
 from .debug import Trace
 from .device import Device, DeviceError
@@ -159,12 +159,32 @@ class Text(BaseModel):
     text: str
 
 
-async def act(coro):
+async def act(coro, *spots: tuple[float, float]):
+    """Run one phone action, wait for the screen to settle and report what happened (#9, after iCTRL).
+
+    ``spots`` are the screen fractions the pointer visits for this action: ignored in the change check, so the
+    pointer's own movement does not count as the screen changing. ``screen_changed`` is None without a live
+    frame before and after.
+    """
+    before = screen.frame
     try:
         await coro
     except (DeviceError, RuntimeError) as e:
         raise HTTPException(409, str(e)) from e
-    return {"ok": True}
+    settled = await screen.settled()
+    waited, stable = settled if isinstance(settled, tuple) else (None, None)
+    after = screen.frame
+    changed = vision.changed(before, after, ignore=spots) if before and after else None
+    return {"ok": True, "settle": {"waited_s": waited, "stable": stable}, "screen_changed": changed}
+
+
+SKILL = Path(__file__).parent / "skill.md"
+
+
+@app.get("/api/skill")
+def skill():
+    """The operating manual for an agent driving this server over HTTP (same token as every other call)."""
+    return PlainTextResponse(SKILL.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8")
 
 
 @app.get("/")
@@ -197,17 +217,17 @@ def step_shot(index: int):
 
 @app.post("/api/tap")
 async def tap(p: Point):
-    return await act(phone.tap(p.x, p.y))
+    return await act(phone.tap(p.x, p.y), (p.x, p.y))
 
 
 @app.post("/api/swipe")
 async def swipe(s: Swipe):
-    return await act(phone.swipe(s.x1, s.y1, s.x2, s.y2))
+    return await act(phone.swipe(s.x1, s.y1, s.x2, s.y2), (s.x1, s.y1), (s.x2, s.y2))
 
 
 @app.post("/api/scroll")
 async def scroll(s: Scroll):
-    return await act(phone.scroll(s.x, s.y, s.lines))
+    return await act(phone.scroll(s.x, s.y, s.lines), (s.x, s.y))
 
 
 @app.post("/api/type")

@@ -205,6 +205,19 @@ Needs the shared `jevlib` client (`JEVLIB_PATH`, default `~/.claude/hooks/jev`) 
 usual. Privacy: the goal, plan, THINK line (the model's description of your screen) and typed text are sent to
 TypeSafe and kept in the ledger.
 
+## Driving it from another agent (`GET /api/skill`)
+
+The server is also a tool for an outside agent (Claude Code, Codex, a script): `GET /api/skill` serves an
+operating manual in the agent-skill format — access, the coordinate system (fractions of the frame), every
+action, the rules that keep an agent out of trouble (no sleeping: actions wait for the screen and report
+`screen_changed`; look before acting; never repeat a miss; stop before paying, sending or deleting), and how
+to hand a task to the built-in agent instead. `GET /openapi.json` has the full schema. Both need the UI
+token like every other call. Borrowed from [iCTRL](https://github.com/OpenMinis/iCTRL)'s `GET /skill`.
+
+Action calls (`/api/tap`, `/api/swipe`, `/api/scroll`, `/api/type`, `/api/key`, `/api/home`, `/api/back`) now wait
+for the screen to settle and answer `{"ok": true, "settle": {"waited_s", "stable"}, "screen_changed": bool}`, so a
+caller knows whether the tap did anything without sleeping or diffing frames itself.
+
 ## Debug mode
 
 Set `HIDAGENT_DEBUG=1` to log every board command with its latency and to save one folder per agent run:
