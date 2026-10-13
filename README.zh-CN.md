@@ -82,8 +82,9 @@ USB 鼠标加键盘。大脑可以是任何兼容 OpenAI 接口的视觉模型�
 安装 [arduino-cli](https://arduino.github.io/arduino-cli/) 和 ESP32 core（3.x），然后：
 
 ```bash
+python3 -c 'import secrets; print(secrets.token_hex(16))'   # 生成板子密钥：同时填进 secrets.h 和 server/.env
 cp hardware/hid_bridge/secrets.example.h hardware/hid_bridge/secrets.h
-# 编辑 secrets.h：填 2.4 GHz Wi-Fi 名称和密码，以及运行服务端的电脑的 IP
+# 编辑 secrets.h：填 2.4 GHz Wi-Fi 名称和密码、运行服务端的电脑的 IP，以及 DEVICE_KEY
 hardware/flash.sh            # 可选参数：[串口] [--debug]
 ```
 
@@ -97,17 +98,18 @@ sudo apt install uxplay gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstre
 
 cd server
 python3 -m venv .venv && .venv/bin/pip install -e .
-cp .env.example .env         # 填 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
+cp .env.example .env         # 填 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY 和 DEVICE_KEY（与 secrets.h 相同）
 set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 ```
 
-浏览器打开 `http://<电脑 IP>:8890`。
+服务端启动时会打印 `web UI: http://<this computer>:8890/?token=…` 和 `AirPlay pin: nnnn`。用浏览器打开这个带 token
+的地址一次，浏览器会记住 token 30 天。AirPlay 配对码需要 UxPlay 1.68 或更新版本。
 
 ### 3. 设置手机（只需一次）
 
 1. **设置 → 辅助功能 → 触控 → 辅助触控**：打开。
 2. 把板子插到手机上，屏幕上会出现一个圆形指针，网页显示控制器已连接。
-3. **控制中心 → 屏幕镜像 → iPhone Agent**，网页里出现实时画面。
+3. **控制中心 → 屏幕镜像 → iPhone Agent**，输入服务端打印的 AirPlay 配对码（只需第一次），网页里出现实时画面。
 4. 在网页里打开 **手动操控 → 校准**。服务端会移动指针、在实时画面里找到它，几秒内自动完成校准；
    如果找不到指针，会提示你在画面里精确点一下指针。
 
@@ -137,8 +139,12 @@ set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 | `LLM_TOKEN_PARAM` | `auto` | 输出长度参数名：`max_tokens`、`max_completion_tokens`（新版 OpenAI 模型），或 `auto` 自动识别 |
 | `ACTOR_*` / `PLANNER_*` | — | 单独覆盖执行模型 / 规划模型的任意 `LLM_*` 配置 |
 | `AIRPLAY_NAME` | `iPhone Agent` | 手机"屏幕镜像"列表里显示的名字 |
-| `PORT` / `DEVICE_PORT` | `8890` / `7300` | 网页端口 / 板子连接的端口 |
-| `HIDAGENT_DATA` | `~/.hidagent` | 校准数据和调试记录 |
+| `DEVICE_KEY` | —（必填） | 板子共享密钥，与 `secrets.h` 相同，至少 16 个字符 |
+| `UI_TOKEN` | 自动生成 | 网页访问 token；不设置时自动生成并保存在 `~/.hidagent/ui_token` |
+| `AIRPLAY_PIN` | 自动生成 | 手机首次镜像时输入的 4 位配对码，保存在 `~/.hidagent/airplay_pin`；`off` 表示关闭 |
+| `HOST` / `PORT` | `0.0.0.0` / `8890` | 网页监听地址和端口（`HOST=127.0.0.1`：仅本机可访问） |
+| `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | 板子连接的地址和端口 |
+| `HIDAGENT_DATA` | `~/.hidagent` | 校准数据、密钥和调试记录 |
 | `HIDAGENT_DEBUG` | `0` | 调试模式，见下文 |
 
 ### 本地模型（可选）
@@ -173,7 +179,25 @@ LLM_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
 
 ## 板子协议
 
-板子本身不含任何逻辑。连上时先发送 `hello <上次重启原因> <开机毫秒数>`，之后服务端通过 TCP 每行发一条命令，板子回复 `ok` 或 `err <原因>`。
+板子本身不含任何逻辑。连上后，板子和服务端先互相证明自己知道 `DEVICE_KEY`（对新随机数做 HMAC-SHA256，密钥本身不在网络上传输）：
+
+```text
+board  -> hello <上次重启原因> <开机毫秒数> <板子随机数>
+server -> challenge <服务端随机数> <HMAC(key, "server:<板子随机数>:<服务端随机数>")>
+board  -> auth <HMAC(key, "board:<服务端随机数>:<板子随机数>")>
+server -> ok                       （或 "err auth" 并断开连接）
+```
+
+之后服务端通过 TCP 每行发一条命令，板子回复 `ok` 或 `err <原因>`。每一行都带有绑定本次连接和序号的标签，
+`session = HMAC(key, "session:<板子随机数>:<服务端随机数>")`：
+
+```text
+server -> <命令> <HMAC(session, "cmd:<n>:<命令>") 的前 32 位十六进制>
+board  -> <回复> <HMAC(session, "reply:<n>:<回复>") 的前 32 位十六进制>      n = 0, 1, 2, …（每次连接重新计数）
+```
+
+标签缺失或错误（伪造、重放、乱序，或超过 512 字节）的行，板子不会执行并直接断开；回复标签错误时服务端也会断开。
+长文本按每段 200 个字符分段输入。
 
 | 命令 | 作用 |
 |---|---|
@@ -210,6 +234,25 @@ server/     Agent、网页界面、屏幕采集和板子连接（Python，FastAP
 - 修改辅助触控的跟踪速度后需要重新校准。
 - 暂不支持横屏 App：在横屏界面里的点按和绘图位置会偏。
 - 在有多个网卡的 Linux 机器上，如果手机列表里看不到接收端，把 Avahi（mDNS）限制在手机所在网络的网卡上。
+
+## 安全
+
+Agent 能做你在解锁手机上能做的任何事，所以对它的访问有保护：
+
+- **网页** —— 所有页面和 API 都需要网页 token（打开 `/?token=…` 后设置的 `SameSite=Strict`、`HttpOnly` cookie，
+  或脚本使用的 `Authorization: Bearer` 请求头；至少 16 个字符）。浏览器表明来自其他来源（`Origin` / `Sec-Fetch-Site`）
+  的修改请求（`POST`）也会被拒绝，这也覆盖了同一主机上共享 cookie 的其他端口。由此挡住 CSRF 和 DNS 重绑定攻击。
+  token 不会写进访问日志。只需要本机访问时设置 `HOST=127.0.0.1`。
+- **板子连接** —— 服务端只接受能证明知道 `DEVICE_KEY` 的板子，板子也只接受能证明同一密钥的服务端，之后的每条命令和回复
+  都带有本次连接的标签。陌生设备连到板子端口既不能操控手机，也不能把真正的板子挤掉；即使有人截获板子的连接（例如 ARP
+  欺骗）并转发握手，也无法注入或重放命令。连接没有加密：网络里的人能看到命令内容，包括输入的文字。
+- **AirPlay** —— 新手机需要输入配对码，输过的手机记录在 `~/.hidagent/uxplay.register`，网络里的其他设备无法给 Agent
+  喂假画面。配对码是固定的 4 位数字，这里没有验证 UxPlay 是否限制猜错次数，所以请让接收端处在可信的网络里。
+- `~/.hidagent` 里的密钥（目录 `0700`、文件 `0600`，从不通过符号链接写入）只有你的用户可读。Wi-Fi 密码和 `DEVICE_KEY`
+  以明文存在板子的 flash 里：板子丢了就当密钥已泄露，两者都要更换。
+
+仍需你自己注意：模型会照着屏幕上的内容行动，包括别人写的文字（网页或消息可能试图给它下指令）。最好用一台没有支付和银行
+App 的备用手机，看着它工作，紧急停止按钮随时备好。使用云端模型时，每张截图都会发送给模型服务商。
 
 ## 合理使用
 

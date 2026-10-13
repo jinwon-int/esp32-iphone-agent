@@ -4,14 +4,32 @@
 // Protocol (one command per line, the board answers "ok" or "err <why>"):
 //   ping | home | move <dx> <dy> | press | release | click
 //   scroll <v> <h> | type <ascii text> | key <combo, e.g. cmd+h, enter>
+//
+// Before any command, board and server prove to each other that they know DEVICE_KEY (HMAC-SHA256 over fresh
+// nonces), so nothing else on the network can pose as the server and drive the phone:
+//   board  -> hello <reset reason> <uptime ms> <board nonce>
+//   server -> challenge <server nonce> <HMAC(key, "server:<board nonce>:<server nonce>")>
+//   board  -> auth <HMAC(key, "board:<server nonce>:<board nonce>")>
+//   server -> ok
+// Then every line carries a tag bound to the session and a sequence number n = 0, 1, 2, …, so a relayed handshake
+// is useless to an attacker: session = HMAC(key, "session:<board nonce>:<server nonce>"),
+//   server -> <command> <HMAC(session, "cmd:<n>:<command>")[:32]>
+//   board  -> <reply> <HMAC(session, "reply:<n>:<reply>")[:32]>
 
 #include <WiFi.h>
+#include <esp_random.h>
 #include <esp_task_wdt.h>
+#include <mbedtls/md.h>
 #include "USB.h"
 #include "USBHIDMouse.h"
 #include "USBHIDKeyboard.h"
 #include "tusb.h"
-#include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVER_HOST, SERVER_PORT
+#include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVER_HOST, SERVER_PORT, DEVICE_KEY
+
+#ifndef DEVICE_KEY
+#error "secrets.h must define DEVICE_KEY (the same value as DEVICE_KEY in server/.env)"
+#endif
+static_assert(sizeof(DEVICE_KEY) - 1 >= 16, "DEVICE_KEY must be at least 16 characters");
 
 const int STEP = 10;      // max pointer delta per report while moving
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
@@ -25,6 +43,9 @@ const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the boa
 USBHIDMouse mouse;
 USBHIDKeyboard keyboard;
 WiFiClient server;
+String session;      // per-connection key from the handshake; empty while not authenticated
+uint32_t seq = 0;    // number of the next command in this session
+const unsigned MAX_LINE = 512;
 
 void movePaced(long dx, long dy) {
   while (dx || dy) {
@@ -98,6 +119,59 @@ String run(const String &line) {
   return "err unknown command";
 }
 
+String hex(const uint8_t *bytes, size_t n) {
+  static const char digits[] = "0123456789abcdef";
+  String out;
+  out.reserve(2 * n);
+  for (size_t i = 0; i < n; i++) {
+    out += digits[bytes[i] >> 4];
+    out += digits[bytes[i] & 15];
+  }
+  return out;
+}
+
+String nonce() {  // hardware RNG: truly random while Wi-Fi is on
+  uint8_t bytes[16];
+  esp_fill_random(bytes, sizeof bytes);
+  return hex(bytes, sizeof bytes);
+}
+
+String mac(const char *key, const char *label, const String &a, const String &b) {  // HMAC-SHA256(key, "label:a:b")
+  String msg = String(label) + ":" + a + ":" + b;
+  uint8_t out[32];
+  mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), (const uint8_t *)key, strlen(key),
+                  (const uint8_t *)msg.c_str(), msg.length(), out);
+  return hex(out, sizeof out);
+}
+
+String tag(const char *direction, const String &line) {  // per-message tag in this session (128 bits)
+  return mac(session.c_str(), direction, String(seq), line).substring(0, 32);
+}
+
+bool sameText(const String &a, const String &b) {  // constant time for equal lengths
+  if (a.length() != b.length()) return false;
+  uint8_t diff = 0;
+  for (size_t i = 0; i < a.length(); i++) diff |= a[i] ^ b[i];
+  return diff == 0;
+}
+
+// One line from the server, or "" on timeout, disconnect or a line over MAX_LINE (never waits past the deadline,
+// even if bytes keep coming).
+String readLine(unsigned long timeoutMs) {
+  String line;
+  unsigned long started = millis();
+  while (millis() - started < timeoutMs && server.connected()) {
+    while (server.available() && millis() - started < timeoutMs) {
+      char c = server.read();
+      if (c == '\n') { line.trim(); return line; }
+      if (line.length() >= MAX_LINE) return "";
+      line += c;
+    }
+    delay(2);
+  }
+  return "";
+}
+
 const char *resetReason() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON: return "power-on";
@@ -108,6 +182,30 @@ const char *resetReason() {
     case ESP_RST_USB: return "usb";
     default: return "other";
   }
+}
+
+// Mutual challenge-response on DEVICE_KEY; false means: not our server (or a different key), hang up.
+bool handshake() {
+  String boardNonce = nonce();
+  server.printf("hello %s %lu %s\n", resetReason(), millis(), boardNonce.c_str());
+  String line = readLine(3000);  // "challenge <server nonce> <proof>"
+  int sp = line.indexOf(' ', 10);
+  if (!line.startsWith("challenge ") || sp != 42) return false;  // 10 + 32 hex digits
+  String serverNonce = line.substring(10, sp);
+  if (!sameText(line.substring(sp + 1), mac(DEVICE_KEY, "server", boardNonce, serverNonce))) return false;
+  server.printf("auth %s\n", mac(DEVICE_KEY, "board", serverNonce, boardNonce).c_str());
+  esp_task_wdt_reset();
+  if (readLine(3000) != "ok") return false;
+  session = mac(DEVICE_KEY, "session", boardNonce, serverNonce);
+  seq = 0;
+  return true;
+}
+
+void hangUp() {  // drop the link and anything held down; the loop reconnects
+  mouse.release(MOUSE_LEFT);
+  keyboard.releaseAll();
+  session = "";
+  server.stop();
 }
 
 void setup() {
@@ -133,23 +231,42 @@ void loop() {
   if (!server.connected()) {
     mouse.release(MOUSE_LEFT);  // a gesture cut off mid-way must not leave the button held (long press)
     keyboard.releaseAll();
+    session = "";
     if (!server.connect(SERVER_HOST, SERVER_PORT, 1000)) { delay(200); return; }  // retry fast: show up at once
     server.setNoDelay(true);
-    server.printf("hello %s %lu\n", resetReason(), millis());  // why the board last restarted, and uptime
+    if (!handshake()) {  // the hello also tells the server why the board last restarted, and its uptime
+#if DEBUG_SERIAL
+      Serial.println("server failed the DEVICE_KEY handshake (wrong key or not our server)");
+#endif
+      hangUp();
+      delay(1000);  // do not hammer a server that refuses us
+      return;
+    }
 #if DEBUG_SERIAL
     Serial.printf("connected to %s:%d as %s after %lu ms\n", SERVER_HOST, SERVER_PORT,
                   WiFi.localIP().toString().c_str(), millis());
 #endif
   }
   if (server.available()) {
-    String line = server.readStringUntil('\n');
-    line.trim();
-    if (!line.length()) return;
-    unsigned long started = millis();
-    String reply = run(line);
-    server.print(reply + "\n");
+    String line = readLine(1000);
+    int sp = line.lastIndexOf(' ');
+    // no tag, a wrong tag (not our session, replayed, reordered) or an over-long line: hang up, never execute
+    if (session.length() == 0 || sp < 0 || !sameText(line.substring(sp + 1), tag("cmd", line.substring(0, sp)))) {
 #if DEBUG_SERIAL
-    Serial.printf("%s -> %s (%lu ms)\n", line.c_str(), reply.c_str(), millis() - started);
+      Serial.println("command failed authentication: hanging up");
+#endif
+      hangUp();
+      return;
+    }
+    String command = line.substring(0, sp);
+#if DEBUG_SERIAL
+    unsigned long started = millis();
+#endif
+    String reply = run(command);
+    server.print(reply + " " + tag("reply", reply) + "\n");
+    seq++;
+#if DEBUG_SERIAL
+    Serial.printf("%s -> %s (%lu ms)\n", command.c_str(), reply.c_str(), millis() - started);
 #endif
   }
 }
