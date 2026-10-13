@@ -88,6 +88,9 @@ cp hardware/hid_bridge/secrets.example.h hardware/hid_bridge/secrets.h
 hardware/flash.sh            # 可选参数：[串口] [--debug]
 ```
 
+板子的 flash 容量默认按 8 MB（XIAO ESP32S3）。4 MB 的板子（例如 ESP32-S3-Zero 或大多数 ESP32-S3 Super Mini）请运行
+`FLASH_SIZE=4M hardware/flash.sh`（固件本身约 1 MB）。
+
 ### 2. 安装并启动服务端
 
 ```bash

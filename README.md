@@ -94,6 +94,9 @@ cp hardware/hid_bridge/secrets.example.h hardware/hid_bridge/secrets.h
 hardware/flash.sh            # optional arguments: [serial port] [--debug]
 ```
 
+The board's flash size defaults to 8 MB (XIAO ESP32S3). For a 4 MB board such as the ESP32-S3-Zero or most
+ESP32-S3 Super Minis, run `FLASH_SIZE=4M hardware/flash.sh` (the firmware needs about 1 MB).
+
 ### 2. Install and start the server
 
 ```bash

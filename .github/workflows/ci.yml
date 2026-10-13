@@ -32,8 +32,10 @@ jobs:
       - run: |
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
-      - name: Build
+      - name: Build (8 MB flash, e.g. XIAO ESP32S3, and 4 MB, e.g. ESP32-S3-Zero)
         working-directory: hardware
         run: |
           cp hid_bridge/secrets.example.h hid_bridge/secrets.h
-          arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=8M" hid_bridge
+          for size in 8M 4M; do
+            arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=$size" hid_bridge
+          done
