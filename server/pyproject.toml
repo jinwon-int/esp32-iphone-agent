@@ -12,6 +12,7 @@ dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27", "pillow>=10"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
+ocr = ["rapidocr-onnxruntime>=1.3,<2"]  # text on the screen with coordinates (GET /api/screen_text, OCR_MODE)
 
 [project.urls]
 Homepage = "https://github.com/onehumanbeing/esp32-iphone-agent"

@@ -138,3 +138,54 @@ def test_skill_file_ships_with_the_package():
     text = resources.files("hidagent").joinpath("skill.md").read_text(encoding="utf-8")
     assert re.search(r"^name: iphone-agent-control$", text, re.M)
     assert asyncio.iscoroutinefunction(__import__("hidagent.app", fromlist=["act"]).act)
+
+
+# --- screen text (OCR, #9 item 4) ---------------------------------------------------------------------------
+
+
+class FakeOCR:
+    last_s = 0.3
+
+    def __init__(self, mode="api", items=None):
+        self.mode, self.items_, self.frames = mode, items or [], []
+
+    @property
+    def enabled(self):
+        return self.mode != "off"
+
+    async def read(self, jpeg):
+        self.frames.append(jpeg)
+        return self.items_
+
+
+def test_screen_text_is_503_when_ocr_is_off(web, monkeypatch):
+    module, client = web
+    monkeypatch.setattr(module, "ocr", FakeOCR("off"))
+    r = client.get("/api/screen_text")
+    assert r.status_code == 503 and "pip install -e '.[ocr]'" in r.json()["detail"]
+
+
+def test_screen_text_needs_a_live_screen_and_filters_by_confidence(web, monkeypatch):
+    module, client = web
+    rows = [{"text": "Wi-Fi", "x": 0.17, "y": 0.47, "w": 0.15, "h": 0.02, "conf": 0.99},
+            {"text": "9:41", "x": 0.1, "y": 0.02, "w": 0.1, "h": 0.01, "conf": 0.55}]
+    ocr = FakeOCR("api", rows)
+    monkeypatch.setattr(module, "ocr", ocr)
+
+    class NoScreen:
+        live, frame, updated, aspect = False, None, 0.0, 0.46
+
+    monkeypatch.setattr(module, "screen", NoScreen())
+    assert client.get("/api/screen_text").status_code == 404
+
+    class LiveScreen:
+        live, frame, updated, aspect = True, jpeg((9, 9, 9)), 1234.5, 0.46
+
+    monkeypatch.setattr(module, "screen", LiveScreen())
+    r = client.get("/api/screen_text")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 2 and body["took_s"] == 0.3 and body["frame_updated"] == 1234.5
+    assert client.get("/api/screen_text?min_conf=0.9").json()["items"] == rows[:1]
+    assert ocr.frames and ocr.frames[0] == LiveScreen.frame
+    assert client.get("/api/status").json()["ocr"] == "api"

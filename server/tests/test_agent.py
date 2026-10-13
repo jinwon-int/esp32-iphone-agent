@@ -212,3 +212,69 @@ def test_frames_settled_reports_wait_and_stability():
 
     waited, stable = asyncio.run(keep_changing())
     assert stable is False and waited >= 0.3
+
+
+def test_actor_gets_screen_text_only_in_ocr_actor_mode(monkeypatch):
+    import asyncio
+
+    from hidagent.agent import Agent, _key
+    from hidagent.debug import Trace
+    from hidagent.ocr import OCR
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+
+    class Actor:
+        model = "fake"
+        prompts = []
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            self.prompts.append(text)
+            return "THINK: tap the row\nDO: tap 173 485"
+
+    class FakeOCR:
+        mode, last_s = "actor", 0.41
+        async def read(self, jpeg):
+            return [{"text": "Wi-Fi", "x": 0.173, "y": 0.485, "w": 0.1, "h": 0.02, "conf": 0.99}]
+        lines = staticmethod(OCR.lines)
+
+    agent = Agent(phone=None, screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None), ocr=FakeOCR())
+    agent.task = "turn on Wi-Fi"
+    acts = asyncio.run(agent._next_actions())
+    prompt = Actor.prompts[-1]
+    assert '"Wi-Fi" @ 173 485' in prompt and "Text read from the screen" in prompt
+    assert prompt.rstrip().endswith("Next action?")
+    assert acts[0]["ocr_s"] == 0.41
+    assert _key(acts[0]) == {"action": "tap", "x": 173, "y": 485}  # ocr_s and the shot are bookkeeping, not the action
+
+    # api mode (or no OCR at all): the actor prompt is untouched
+    FakeOCR.mode = "api"
+    Actor.prompts.clear()
+    asyncio.run(agent._next_actions())
+    assert "Text read from the screen" not in Actor.prompts[-1]
+    agent.steps = [{"action": "tap", "x": 1, "y": 2, "ocr_s": 0.4, "changed": True}]
+    asyncio.run(agent._next_actions())
+    assert "ocr_s" not in Actor.prompts[-1]  # bookkeeping never reaches the actor's history
+
+
+def test_ocr_failure_never_costs_the_step(monkeypatch):
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+
+    class Actor:
+        model = "fake"
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            return "THINK: ok\nDO: home"
+
+    class BrokenOCR:
+        mode, last_s = "actor", 0.0
+        async def read(self, jpeg):
+            raise RuntimeError("model file missing")
+
+    agent = Agent(phone=None, screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None), ocr=BrokenOCR())
+    agent.task = "t"
+    assert asyncio.run(agent._next_actions())[0]["action"] == "home"

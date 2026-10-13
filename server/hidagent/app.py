@@ -17,6 +17,7 @@ from .debug import Trace
 from .device import Device, DeviceError
 from .gate import Gate
 from .llm import LLM
+from .ocr import OCR
 from .phone import Phone
 from .screen import Screen
 from .screen_push import DEFAULT_PORT as PUSH_DEFAULT_PORT
@@ -58,8 +59,9 @@ else:
     screen = Screen(os.environ.get("AIRPLAY_NAME", "iPhone Agent"), pin=AIRPLAY_PIN,
                     register=DATA_DIR / "uxplay.register")
 phone = Phone(device, DATA_DIR / "calibration.json", screen)
+ocr = OCR.from_env()  # optional: text on the screen with coordinates (pip install -e '.[ocr]')
 agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
-              Trace(DATA_DIR / "traces" if DEBUG else None), gate=Gate.from_env(DATA_DIR))
+              Trace(DATA_DIR / "traces" if DEBUG else None), gate=Gate.from_env(DATA_DIR), ocr=ocr)
 
 
 @asynccontextmanager
@@ -196,7 +198,7 @@ def index():
 def status():
     return {"device": device.connected, "screen": screen.live, "source": SCREEN_SOURCE, "calibrated": phone.calibrated,
             "debug": DEBUG, "trace": str(agent.trace.dir or ""), "aspect": round(screen.aspect, 4),
-            "gate": agent.gate.mode if agent.gate else "off",
+            "gate": agent.gate.mode if agent.gate else "off", "ocr": ocr.mode,
             "models": {"planner": agent.planner.model, "actor": agent.actor.model},
             "agent": {"running": agent.running, "task": agent.task, "steps": agent.steps}}
 
@@ -206,6 +208,19 @@ def frame():
     if not screen.live:
         raise HTTPException(404, "no live screen: start screen mirroring on the phone")
     return Response(screen.frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/screen_text")
+async def screen_text(min_conf: float = 0.5):
+    """Text on the current screen with the centre of each line as fractions of the frame (OCR, optional extra)."""
+    if not ocr.enabled:
+        raise HTTPException(503, "OCR is off: pip install -e '.[ocr]' on the server and set OCR_MODE=api or actor")
+    if not screen.live:
+        raise HTTPException(404, "no live screen: start screen mirroring on the phone")
+    frame, updated = screen.frame, screen.updated
+    items = [r for r in await ocr.read(frame) if r["conf"] >= min_conf]
+    return {"items": items, "count": len(items), "took_s": ocr.last_s, "frame_updated": updated,
+            "aspect": round(screen.aspect, 4)}
 
 
 @app.get("/api/steps/{index}.jpg")
