@@ -278,3 +278,32 @@ def test_ocr_failure_never_costs_the_step(monkeypatch):
     agent = Agent(phone=None, screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None), ocr=BrokenOCR())
     agent.task = "t"
     assert asyncio.run(agent._next_actions())[0]["action"] == "home"
+
+
+def test_start_launches_the_run_and_the_run_id_counts_runs():
+    """Regression: a run counter once shared the name of the `_run` coroutine method, so start() raised
+    "TypeError: 'int' object is not callable" and no task could ever start (found in the first device E2E)."""
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    class Screen:
+        live = True
+
+    async def go():
+        agent = Agent(phone=None, screen=Screen(), actor=None, planner=None, trace=Trace(None))
+        assert callable(agent._run)
+        before = agent._run_id
+        agent.start("noop")
+        assert agent.running and agent._run_id == before + 1
+        agent.stop()
+        try:
+            await agent._job
+        except asyncio.CancelledError:
+            pass
+        assert not agent.running
+        agent.clear()
+        assert agent._run_id == before + 2
+
+    asyncio.run(go())

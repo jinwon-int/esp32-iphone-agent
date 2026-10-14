@@ -142,7 +142,8 @@ class Agent:
         self.trace = trace
         self.gate = gate  # optional second opinion on each action (observe only: never changes what is done)
         self.ocr = ocr  # optional: with OCR_MODE=actor the actor also gets the screen's text with coordinates
-        self._run = 0  # bumped per run, so a late gate answer never lands in a newer run's steps
+        self._run_id = 0  # bumped per run, so a late gate answer never lands in a newer run's steps
+        # (not `_run`: that name is the coroutine method below; a counter there made start() raise TypeError)
         self.max_steps, self.max_failures = max_steps, max_failures
         self.task, self.plan, self.steps = "", "", []
         self.shots: dict[int, bytes] = {}  # step index -> screenshot the model decided on
@@ -160,7 +161,7 @@ class Agent:
             raise RuntimeError("no phone screen: start Screen Mirroring first")
         self.task, self.plan, self.steps, self.shots = task, "", [], {}
         self._pointer = (0.0, 0.0)
-        self._run += 1
+        self._run_id += 1
         if self.gate:
             self.gate.new_session()
         self.trace.start(task)
@@ -174,7 +175,7 @@ class Agent:
         if self.running:
             raise RuntimeError("stop the agent first")
         self.task, self.plan, self.steps, self.shots = "", "", [], {}
-        self._run += 1
+        self._run_id += 1
 
     def _record(self, shot: bytes | None = None, **step) -> None:
         if shot:
@@ -279,10 +280,10 @@ class Agent:
 
     def _attach(self, check: asyncio.Task, index: int) -> None:
         """Put the gate's answer on the step when it arrives (the page shows it on its next poll)."""
-        run = self._run
+        run = self._run_id
 
         def done(task: asyncio.Task) -> None:
-            if task.cancelled() or task.exception() or run != self._run or index >= len(self.steps):
+            if task.cancelled() or task.exception() or run != self._run_id or index >= len(self.steps):
                 return
             self.steps[index]["gate"] = task.result()
 
