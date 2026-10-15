@@ -59,10 +59,12 @@ else:
     screen = Screen(os.environ.get("AIRPLAY_NAME", "iPhone Agent"), pin=AIRPLAY_PIN,
                     register=DATA_DIR / "uxplay.register")
 try:
-    home_via = HomeVia.from_env()  # how to reach the Home Screen: bottom flick (default) or AssistiveTouch (#17)
+    # how to reach the Home Screen: bottom flick (default) or AssistiveTouch (#17); relative mouse or absolute
+    # pointer, which must match how the board was built (ABSOLUTE_POINTER, #14)
+    phone = Phone(device, DATA_DIR / "calibration.json", screen, HomeVia.from_env(),
+                  os.environ.get("POINTER_MODE", "").strip().lower() or "relative")
 except ValueError as e:
     raise SystemExit(str(e)) from None
-phone = Phone(device, DATA_DIR / "calibration.json", screen, home_via)
 ocr = OCR.from_env()  # optional: text on the screen with coordinates (pip install -e '.[ocr]')
 agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
               Trace(DATA_DIR / "traces" if DEBUG else None), gate=Gate.from_env(DATA_DIR), ocr=ocr)
@@ -201,6 +203,7 @@ def index():
 @app.get("/api/status")
 def status():
     return {"device": device.connected, "screen": screen.live, "source": SCREEN_SOURCE, "calibrated": phone.calibrated,
+            "pointer": "absolute" if phone.absolute else "relative",
             "debug": DEBUG, "trace": str(agent.trace.dir or ""), "aspect": round(screen.aspect, 4),
             "gate": agent.gate.mode if agent.gate else "off", "ocr": ocr.mode,
             "models": {"planner": agent.planner.model, "actor": agent.actor.model},

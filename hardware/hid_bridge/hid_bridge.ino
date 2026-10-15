@@ -4,6 +4,11 @@
 // Protocol (one command per line, the board answers "ok" or "err <why>"):
 //   ping | home | move <dx> <dy> | press | release | click
 //   scroll <v> <h> | type <ascii text> | key <combo, e.g. cmd+h, enter>
+//   at <x> <y>   (ABSOLUTE_POINTER builds only: put the pointer at x, y in 0..32767 across the screen)
+//
+// ABSOLUTE_POINTER=1 builds an absolute pointer (like a tablet) instead of a relative mouse (#14): the server
+// then sends screen positions and needs no calibration. In that build `home` goes to the top-left corner and
+// `move` shifts the last position by dx, dy absolute units, so older callers (e.g. the keep-awake nudge) still work.
 //
 // Before any command, board and server prove to each other that they know DEVICE_KEY (HMAC-SHA256 over fresh
 // nonces), so nothing else on the network can pose as the server and drive the phone:
@@ -34,19 +39,35 @@ static_assert(sizeof(DEVICE_KEY) - 1 >= 16, "DEVICE_KEY must be at least 16 char
 const int STEP = 10;      // max pointer delta per report while moving
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
 const int HOME_REPORTS = 50;
+#ifndef ABSOLUTE_POINTER
+#define ABSOLUTE_POINTER 0  // 1: absolute pointer (POINTER_MODE=absolute on the server); 0: relative mouse
+#endif
+const long ABS_MAX = 32767;  // logical range of the absolute pointer's x and y
 #ifndef DEBUG_SERIAL
 #define DEBUG_SERIAL 0  // 1: echo every command over USB serial (needs CDCOnBoot=cdc)
 #endif
 
 const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the board instead of staying offline
 
+#if ABSOLUTE_POINTER
+USBHIDAbsoluteMouse mouse;  // one mouse per build: both kinds share the HID report id
+long absX = 0, absY = 0;    // where the absolute pointer is
+#else
 USBHIDMouse mouse;
+#endif
 USBHIDKeyboard keyboard;
 WiFiClient server;
 String session;      // per-connection key from the handshake; empty while not authenticated
 uint32_t seq = 0;    // number of the next command in this session
 const unsigned MAX_LINE = 512;
 
+#if ABSOLUTE_POINTER
+void moveAbs(long x, long y, int8_t wheel = 0, int8_t pan = 0) {
+  absX = constrain(x, 0, ABS_MAX);
+  absY = constrain(y, 0, ABS_MAX);
+  mouse.move(absX, absY, wheel, pan);
+}
+#else
 void movePaced(long dx, long dy) {
   while (dx || dy) {
     int sx = constrain(dx, -STEP, STEP), sy = constrain(dy, -STEP, STEP);
@@ -56,6 +77,7 @@ void movePaced(long dx, long dy) {
     delay(STEP_MS);
   }
 }
+#endif
 
 uint8_t keyCode(const String &k) {
   if (k == "enter") return KEY_RETURN;
@@ -105,15 +127,27 @@ String run(const String &line) {
 
   if (cmd == "ping") return "ok";
   if (!usbReady()) return "err phone usb asleep (unlock the phone)";
+#if ABSOLUTE_POINTER
+  if (cmd == "home") { moveAbs(0, 0); return "ok"; }
+  if (cmd == "move") { moveAbs(absX + a, absY + b); return "ok"; }
+  if (cmd == "at") {
+    if (a < 0 || a > ABS_MAX || b < 0 || b > ABS_MAX) return "err at needs x y in 0..32767";
+    moveAbs(a, b);
+    return "ok";
+  }
+  if (cmd == "scroll") { moveAbs(absX, absY, a, b); return "ok"; }
+#else
   if (cmd == "home") {  // slam the pointer into the top-left corner
     for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, -127); delay(2); }
     return "ok";
   }
   if (cmd == "move") { movePaced(a, b); return "ok"; }
+  if (cmd == "at") return "err absolute pointer off (build with ABSOLUTE_POINTER=1)";
+  if (cmd == "scroll") { mouse.move(0, 0, a, b); return "ok"; }
+#endif
   if (cmd == "press") { mouse.press(MOUSE_LEFT); return "ok"; }
   if (cmd == "release") { mouse.release(MOUSE_LEFT); return "ok"; }
   if (cmd == "click") { mouse.press(MOUSE_LEFT); delay(60); mouse.release(MOUSE_LEFT); return "ok"; }
-  if (cmd == "scroll") { mouse.move(0, 0, a, b); return "ok"; }
   if (cmd == "type") { keyboard.print(arg); return "ok"; }
   if (cmd == "key") return pressCombo(arg) ? "ok" : "err unknown key";
   return "err unknown command";

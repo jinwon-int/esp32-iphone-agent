@@ -3,6 +3,7 @@
 # Usage: [FLASH_SIZE=4M|8M|16M|32M] hardware/flash.sh [serial port] [--debug]   (arguments in any order)
 #   FLASH_SIZE: the board's flash chip, default 8M (XIAO ESP32S3). 4MB boards such as the ESP32-S3-Zero or most
 #   ESP32-S3 Super Minis need FLASH_SIZE=4M; the firmware itself needs about 1 MB.
+#   ABSOLUTE_POINTER=1: an absolute pointer instead of a relative mouse (#14); set POINTER_MODE=absolute on the server.
 # A running bridge is a TinyUSB device, so it is first kicked into the ROM
 # bootloader with a 1200-baud touch; a blank board is flashed directly.
 set -euo pipefail
@@ -25,8 +26,14 @@ for arg in "$@"; do
   esac
 done
 PORT=${PORT:-$(port)}
-FLAGS=(--build-property "compiler.cpp.extra_flags="); [[ $DEBUG == 1 ]] && FLAGS=(--build-property "compiler.cpp.extra_flags=-DDEBUG_SERIAL=1")
-echo "board: $FQBN  port: ${PORT:-none found}"
+ABSOLUTE_POINTER=${ABSOLUTE_POINTER:-0}
+case "$ABSOLUTE_POINTER" in
+  0|1) ;;
+  *) echo "ABSOLUTE_POINTER must be 0 or 1 (got '$ABSOLUTE_POINTER')" >&2; exit 2 ;;
+esac
+DEFINES="-DABSOLUTE_POINTER=$ABSOLUTE_POINTER"; [[ $DEBUG == 1 ]] && DEFINES+=" -DDEBUG_SERIAL=1"
+FLAGS=(--build-property "compiler.cpp.extra_flags=$DEFINES")
+echo "board: $FQBN  absolute pointer: $ABSOLUTE_POINTER  port: ${PORT:-none found}"
 
 arduino-cli compile -b "$FQBN" "${FLAGS[@]}" --output-dir build hid_bridge
 if [[ -z $PORT ]]; then

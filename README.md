@@ -97,6 +97,11 @@ hardware/flash.sh            # optional arguments: [serial port] [--debug]
 The board's flash size defaults to 8 MB (XIAO ESP32S3). For a 4 MB board such as the ESP32-S3-Zero or most
 ESP32-S3 Super Minis, run `FLASH_SIZE=4M hardware/flash.sh` (the firmware needs about 1 MB).
 
+**Experimental:** `ABSOLUTE_POINTER=1 hardware/flash.sh` builds the board as an absolute pointer (like a tablet)
+instead of a relative mouse; set `POINTER_MODE=absolute` on the server to match. The server then sends screen
+positions and needs no calibration or pointer search. Whether iOS maps it to the whole screen is still being
+measured on a real phone (#14); the relative mouse stays the default.
+
 ### 2. Install and start the server
 
 ```bash
@@ -171,6 +176,7 @@ Set in `server/.env` (see [`.env.example`](server/.env.example)):
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | Address and port the board connects to |
 | `HIDAGENT_DATA` | `~/.hidagent` | Calibration, secrets and debug traces |
 | `GATE_MODE` | `off` | `observe`: ask Jev about each action and record the answer, see "Action gate" |
+| `POINTER_MODE` | `relative` | `absolute` for a board built with `ABSOLUTE_POINTER=1` (experimental, see "Flash the board"); must match the board |
 | `HOME_METHOD` | `swipe` | How to reach the Home Screen: `swipe` (flick up from the bottom edge) or `assistivetouch` (tap the AssistiveTouch button, see "Set up the phone") — for iOS versions that ignore the flick from a pointer |
 | `ASSISTIVETOUCH_BUTTON` / `ASSISTIVETOUCH_MENU_HOME` | — | `assistivetouch` only: where the button and the menu's Home item are, as `x,y` screen fractions (e.g. `0.9,0.27`). Leave the menu item out when the button's Single-Tap action is set to Home |
 | `OCR_MODE` | `api` if installed | `off` · `api` (`GET /api/screen_text`) · `actor` (also added to the actor's prompt). Needs `pip install -e '.[ocr]'`, see "Screen text (OCR)" |
@@ -290,6 +296,7 @@ running it; the server drops the link on a wrong reply tag. Long text is typed i
 | `ping` | Health check |
 | `home` | Push the pointer into the top-left corner (a known position) |
 | `move <dx> <dy>` | Relative pointer move, at a constant pace so iOS pointer acceleration stays predictable |
+| `at <x> <y>` | Absolute pointer builds only: put the pointer at x, y (0-32767 across the screen). There, `home` goes to the top-left corner and `move` shifts the last position |
 | `press` / `release` / `click` | Left button down / up / both |
 | `scroll <v> <h>` | Scroll wheel |
 | `type <text>` | Type ASCII text |

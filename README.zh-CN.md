@@ -91,6 +91,10 @@ hardware/flash.sh            # 可选参数：[串口] [--debug]
 板子的 flash 容量默认按 8 MB（XIAO ESP32S3）。4 MB 的板子（例如 ESP32-S3-Zero 或大多数 ESP32-S3 Super Mini）请运行
 `FLASH_SIZE=4M hardware/flash.sh`（固件本身约 1 MB）。
 
+**实验性：** `ABSOLUTE_POINTER=1 hardware/flash.sh` 把板子编译成绝对坐标指针（类似数位板）而不是相对鼠标；服务端需相应设置
+`POINTER_MODE=absolute`。这样服务端直接发送屏幕位置，无需校准和寻找指针。iOS 是否把它对应到整个屏幕仍在真机上测量（#14）；
+默认仍是相对鼠标。
+
 ### 2. 安装并启动服务端
 
 ```bash
@@ -160,6 +164,7 @@ set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 | `HOME_METHOD` | `swipe` | 回到主屏幕的方式：`swipe`（从底边上滑）或 `assistivetouch`（点辅助触控按钮，见"设置手机"），用于不响应指针上滑的 iOS 版本 |
 | `ASSISTIVETOUCH_BUTTON` / `ASSISTIVETOUCH_MENU_HOME` | — | 仅 `assistivetouch`：按钮和菜单"主屏幕"项的位置，`x,y` 屏幕比例（如 `0.9,0.27`）。若按钮"轻点一下"已设为主屏幕，可不设菜单项 |
 | `GATE_MODE` | `off` | `observe`：每个动作都询问 Jev 并记录答案，见"动作闸门" |
+| `POINTER_MODE` | `relative` | 板子用 `ABSOLUTE_POINTER=1` 编译时设为 `absolute`（实验性，见"刷固件"）；须与板子一致 |
 | `HIDAGENT_DEBUG` | `0` | 调试模式，见下文 |
 
 ### 本地模型（可选）
@@ -237,6 +242,7 @@ board  -> <回复> <HMAC(session, "reply:<n>:<回复>") 的前 32 位十六进�
 | `ping` | 健康检查 |
 | `home` | 把指针推到左上角（一个已知位置） |
 | `move <dx> <dy>` | 相对移动指针，匀速移动，让 iOS 的指针加速度可预测 |
+| `at <x> <y>` | 仅绝对坐标版本：把指针放到 x, y（整个屏幕 0-32767）。此时 `home` 回到左上角，`move` 在上次位置上偏移 |
 | `press` / `release` / `click` | 左键按下 / 松开 / 点击 |
 | `scroll <v> <h>` | 滚轮 |
 | `type <text>` | 输入 ASCII 文字 |
