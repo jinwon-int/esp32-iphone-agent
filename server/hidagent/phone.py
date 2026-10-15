@@ -9,8 +9,10 @@ work for any frame size.
 import asyncio
 import json
 import logging
+import os
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import vision
@@ -26,11 +28,60 @@ TAP_GAP = 0.15          # seconds to stay still after a click, so iOS sees a fin
 NUDGE = 12              # mouse units the pointer is wiggled by to find it on screen
 AIM_TOLERANCE = 0.008   # screen fraction; a bigger miss is corrected before pressing
 MAX_MISS = 0.06         # bigger misses are still corrected, but not learned from (they may be misreadings)
+HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
+MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
+
+
+def _fraction_point(name: str, value: str) -> tuple[float, float]:
+    try:
+        x, y = (float(v) for v in value.split(","))
+    except ValueError:
+        raise ValueError(f"{name} must be 'x,y' as screen fractions (e.g. 0.9,0.27), not {value!r}") from None
+    if not (0 <= x <= 1 and 0 <= y <= 1):
+        raise ValueError(f"{name} must be screen fractions between 0 and 1, not {value!r}")
+    return x, y
+
+
+@dataclass(frozen=True)
+class HomeVia:
+    """How the agent gets to the Home Screen.
+
+    By default it flicks up from the bottom edge. Some iOS versions ignore that flick from a pointer (iOS 27 did,
+    and the keyboard's cmd+h too; see #17), so the AssistiveTouch button can be used instead:
+    ``button`` alone taps the button (AssistiveTouch "Single-Tap" set to Home); with ``menu_home`` the button
+    opens the menu and that point is its Home item. Both are screen fractions, as seen in the live view.
+    """
+    button: tuple[float, float] | None = None
+    menu_home: tuple[float, float] | None = None
+
+    @classmethod
+    def from_env(cls, env=os.environ) -> "HomeVia":
+        """``HOME_METHOD`` = ``swipe`` (default) or ``assistivetouch`` (needs ``ASSISTIVETOUCH_BUTTON``, and
+        ``ASSISTIVETOUCH_MENU_HOME`` unless Single-Tap is set to Home)."""
+        method = env.get("HOME_METHOD", "").strip().lower() or "swipe"
+        if method == "swipe":
+            return cls()
+        if method != "assistivetouch":
+            raise ValueError(f"HOME_METHOD must be 'swipe' or 'assistivetouch', not {method!r}")
+        button = env.get("ASSISTIVETOUCH_BUTTON", "").strip()
+        if not button:
+            raise ValueError("HOME_METHOD=assistivetouch needs ASSISTIVETOUCH_BUTTON=x,y (where the button sits)")
+        menu = env.get("ASSISTIVETOUCH_MENU_HOME", "").strip()
+        return cls(_fraction_point("ASSISTIVETOUCH_BUTTON", button),
+                   _fraction_point("ASSISTIVETOUCH_MENU_HOME", menu) if menu else None)
+
+    @property
+    def path(self) -> list[tuple[float, float]]:
+        """Screen points the pointer visits on the way home (for drawing the step)."""
+        if self.button is None:
+            return list(HOME_SWIPE)
+        return [self.button] + ([self.menu_home] if self.menu_home else [])
 
 
 class Phone:
-    def __init__(self, device: Device, calibration_file: Path, screen=None):
+    def __init__(self, device: Device, calibration_file: Path, screen=None, home: HomeVia | None = None):
         self.device, self._file, self.screen = device, calibration_file, screen
+        self.home = home or HomeVia()
         # mouse units needed to cross the full screen width / height
         saved = json.loads(calibration_file.read_text()) if calibration_file.exists() else None
         self.span = {"w": saved["w"], "h": saved["h"]} if saved else None
@@ -212,7 +263,21 @@ class Phone:
         await self.device.send(f"key {combo}")
 
     async def go_home(self) -> None:
-        await self.swipe(0.5, 0.995, 0.5, 0.6, hold=False)  # resting here would open the app switcher
+        if self.home.button is None:
+            await self.swipe(*HOME_SWIPE[0], *HOME_SWIPE[1], hold=False)  # resting there would open the app switcher
+            return
+        # Plain taps: aiming wiggles the pointer over the translucent button and tends to miss it (#17-B).
+        await self.tap(*self.home.button)
+        if self.home.menu_home:
+            await self._menu_open()
+            await self.tap(*self.home.menu_home)
+
+    async def _menu_open(self) -> None:
+        """Wait until the AssistiveTouch menu has finished opening."""
+        if self.screen is not None and self.screen.live:
+            await self.screen.settled(quiet=0.2, least=0.3, most=1.5)
+        else:
+            await asyncio.sleep(MENU_OPEN_S)
 
     async def go_back(self) -> None:
         await self.swipe(0.005, 0.45, 0.6, 0.45, hold=False)

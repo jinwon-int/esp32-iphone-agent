@@ -115,6 +115,11 @@ set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 3. **控制中心 → 屏幕镜像 → iPhone Agent**，输入服务端打印的 AirPlay 配对码（只需第一次），网页里出现实时画面。
 4. 在网页里打开 **手动操控 → 校准**。服务端会移动指针、在实时画面里找到它，几秒内自动完成校准；
    如果找不到指针，会提示你在画面里精确点一下指针。
+5. 如果网页里的 **主屏幕** 回不到主屏幕（iOS 27 不响应指针从底边上滑，`cmd+h` 也无效），改用辅助触控：
+   设置 `HOME_METHOD=assistivetouch` 和 `ASSISTIVETOUCH_BUTTON`（悬浮按钮的位置），再二选一：
+   - `ASSISTIVETOUCH_MENU_HOME`：菜单里"主屏幕"的位置（在网页里点一下按钮即可看到），或
+   - 在手机上设置 **辅助触控 → 自定操作 → 轻点一下 → 主屏幕**，不设菜单位置。
+   请在亮色画面（如主屏幕）上校准：暗色画面里很难找到指针。之后不要移动按钮；移动了就更新设置。
 
 ### 4. 下达任务
 
@@ -152,6 +157,8 @@ set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 | `HOST` / `PORT` | `0.0.0.0` / `8890` | 网页监听地址和端口（`HOST=127.0.0.1`：仅本机可访问） |
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | 板子连接的地址和端口 |
 | `HIDAGENT_DATA` | `~/.hidagent` | 校准数据、密钥和调试记录 |
+| `HOME_METHOD` | `swipe` | 回到主屏幕的方式：`swipe`（从底边上滑）或 `assistivetouch`（点辅助触控按钮，见"设置手机"），用于不响应指针上滑的 iOS 版本 |
+| `ASSISTIVETOUCH_BUTTON` / `ASSISTIVETOUCH_MENU_HOME` | — | 仅 `assistivetouch`：按钮和菜单"主屏幕"项的位置，`x,y` 屏幕比例（如 `0.9,0.27`）。若按钮"轻点一下"已设为主屏幕，可不设菜单项 |
 | `GATE_MODE` | `off` | `observe`：每个动作都询问 Jev 并记录答案，见"动作闸门" |
 | `HIDAGENT_DEBUG` | `0` | 调试模式，见下文 |
 

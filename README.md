@@ -122,6 +122,13 @@ token) once in your browser; it remembers the token for 30 days. UxPlay 1.68 or 
    first time). The live screen appears in the web page.
 4. In the web page, open **Manual controls → Calibrate**. The server moves the pointer, finds it on the live screen
    and calibrates itself in a few seconds; if it cannot see the pointer, it asks you to click exactly on it.
+5. If **Home** in the web page does not reach the Home Screen (iOS 27 ignores the bottom flick from a pointer, and
+   `cmd+h` too), go home through AssistiveTouch: set `HOME_METHOD=assistivetouch` and
+   `ASSISTIVETOUCH_BUTTON` to where the button sits, plus either
+   - `ASSISTIVETOUCH_MENU_HOME`, the menu's Home item (tap the button once in the web page to see where it is), or
+   - **AssistiveTouch → Custom Actions → Single-Tap → Home** on the phone, and no menu item.
+   Calibrate on a bright screen (the Home Screen): the pointer is hard to find on a dark one. Keep the button where
+   it is afterwards; if it moves, update the setting.
 
 ### 4. Give it a task
 
@@ -164,6 +171,8 @@ Set in `server/.env` (see [`.env.example`](server/.env.example)):
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | Address and port the board connects to |
 | `HIDAGENT_DATA` | `~/.hidagent` | Calibration, secrets and debug traces |
 | `GATE_MODE` | `off` | `observe`: ask Jev about each action and record the answer, see "Action gate" |
+| `HOME_METHOD` | `swipe` | How to reach the Home Screen: `swipe` (flick up from the bottom edge) or `assistivetouch` (tap the AssistiveTouch button, see "Set up the phone") — for iOS versions that ignore the flick from a pointer |
+| `ASSISTIVETOUCH_BUTTON` / `ASSISTIVETOUCH_MENU_HOME` | — | `assistivetouch` only: where the button and the menu's Home item are, as `x,y` screen fractions (e.g. `0.9,0.27`). Leave the menu item out when the button's Single-Tap action is set to Home |
 | `OCR_MODE` | `api` if installed | `off` · `api` (`GET /api/screen_text`) · `actor` (also added to the actor's prompt). Needs `pip install -e '.[ocr]'`, see "Screen text (OCR)" |
 | `HIDAGENT_DEBUG` | `0` | Debug mode, see below |
 

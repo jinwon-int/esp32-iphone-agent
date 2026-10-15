@@ -18,7 +18,7 @@ from .device import Device, DeviceError
 from .gate import Gate
 from .llm import LLM
 from .ocr import OCR
-from .phone import Phone
+from .phone import HomeVia, Phone
 from .screen import Screen
 from .screen_push import DEFAULT_PORT as PUSH_DEFAULT_PORT
 from .screen_push import PushScreen
@@ -58,7 +58,11 @@ if SCREEN_SOURCE == "push":
 else:
     screen = Screen(os.environ.get("AIRPLAY_NAME", "iPhone Agent"), pin=AIRPLAY_PIN,
                     register=DATA_DIR / "uxplay.register")
-phone = Phone(device, DATA_DIR / "calibration.json", screen)
+try:
+    home_via = HomeVia.from_env()  # how to reach the Home Screen: bottom flick (default) or AssistiveTouch (#17)
+except ValueError as e:
+    raise SystemExit(str(e)) from None
+phone = Phone(device, DATA_DIR / "calibration.json", screen, home_via)
 ocr = OCR.from_env()  # optional: text on the screen with coordinates (pip install -e '.[ocr]')
 agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
               Trace(DATA_DIR / "traces" if DEBUG else None), gate=Gate.from_env(DATA_DIR), ocr=ocr)

@@ -13,7 +13,7 @@ from .device import DeviceError
 from .gate import Gate
 from .gate import describe as gate_describe
 from .llm import LLM
-from .phone import Phone
+from .phone import HOME_SWIPE, Phone
 from .screen import Screen
 
 log = logging.getLogger(__name__)
@@ -240,7 +240,7 @@ class Agent:
                 started = time.time()
                 await self._do(act)
                 act["act_s"] = round(time.time() - started, 2)
-                spots += _pointer_path(act)
+                spots += _pointer_path(act, getattr(getattr(self.phone, "home", None), "path", None))
                 self._pointer = spots[-1]
             self._record(act.pop("_shot"), **act)
             if check:
@@ -372,15 +372,15 @@ class Agent:
             case other: raise ValueError(f"unknown action {other!r}")
 
 
-def _pointer_path(act: dict) -> list[tuple[float, float]]:
-    """Screen points (fractions) the pointer passes through for one action."""
+def _pointer_path(act: dict, home: list[tuple[float, float]] | None = None) -> list[tuple[float, float]]:
+    """Screen points (fractions) the pointer passes through for one action; home: the phone's way home."""
     f = lambda x, y: (x / 1000, y / 1000)  # noqa: E731
     match act["action"]:
         case "tap": return [f(act["x"], act["y"])]
         case "swipe": return [f(act["x1"], act["y1"]), f(act["x2"], act["y2"])]
         case "path": return [f(*p) for p in act["points"]]
         case "circle": return [f(act["x"] + act["r"], act["y"])]
-        case "home": return [(0.5, 0.995), (0.5, 0.6)]
+        case "home": return list(home or HOME_SWIPE)
         case "back": return [(0.005, 0.45), (0.6, 0.45)]
         case _: return []
 
