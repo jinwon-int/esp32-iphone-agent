@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, vision
+from . import auth, bench, vision
 from .agent import Agent
 from .debug import Trace
 from .device import Device, DeviceError
@@ -282,6 +282,19 @@ async def raw(t: Text):
     if not DEBUG:
         raise HTTPException(404)
     return await act(device.send(t.text))
+
+
+@app.post("/api/bench/pointer")
+async def bench_pointer(rounds: int = 1):
+    """Pointer accuracy and move time at nine spots, nothing clicked (#14). Returns a Markdown table too."""
+    if agent.running:
+        raise HTTPException(409, "the agent is running: stop it first")
+    if not screen.live:
+        raise HTTPException(404, "no live screen: start screen mirroring on the phone")
+    try:
+        return await bench.pointer(phone, rounds=max(1, min(rounds, 5)))
+    except (DeviceError, RuntimeError) as e:
+        raise HTTPException(409, str(e)) from e
 
 
 @app.post("/api/calibrate/start")

@@ -25,7 +25,12 @@ curl -s -H "$H" -H 'Content-Type: application/json' -d '{"x":0.5,"y":0.42}' $S/a
 `GET /api/status` → `{"device":bool, "screen":bool, "source":"airplay|push", "calibrated":bool, "aspect":w/h, …}`.
 If `device` is false the board is not connected; if `screen` is false there is no live screen; if `calibrated`
 is false, run `POST /api/calibrate/start` (`{"auto":true}` means it calibrated by itself) — otherwise a person
-has to click the pointer in the web UI once.
+has to click the pointer in the web UI once. `"pointer"` is `relative` or `absolute` (an absolute pointer needs no
+calibration).
+
+To check how well taps land, `POST /api/bench/pointer` (optional `?rounds=1..5`) moves the pointer to nine spots
+without clicking, finds it on the screen and returns the miss per spot, move times and a Markdown table
+(`"markdown"`). Run it on a bright screen such as the Home Screen, never while the agent runs.
 
 ## Coordinates
 
