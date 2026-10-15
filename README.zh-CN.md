@@ -93,7 +93,7 @@ hardware/flash.sh            # 可选参数：[串口] [--debug]
 
 **实验性：** `ABSOLUTE_POINTER=1 hardware/flash.sh` 把板子编译成绝对坐标指针（类似数位板）而不是相对鼠标；服务端需相应设置
 `POINTER_MODE=absolute`。这样服务端直接发送屏幕位置，无需校准和寻找指针。iOS 是否把它对应到整个屏幕仍在真机上测量（#14）；
-默认仍是相对鼠标。
+默认仍是相对鼠标。绝对坐标指针需要 iOS 18 或更新版本，并请保持竖屏（打开竖排方向锁定）：旋转后坐标可能对不上。
 
 ### 2. 安装并启动服务端
 
@@ -119,11 +119,14 @@ set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 3. **控制中心 → 屏幕镜像 → iPhone Agent**，输入服务端打印的 AirPlay 配对码（只需第一次），网页里出现实时画面。
 4. 在网页里打开 **手动操控 → 校准**。服务端会移动指针、在实时画面里找到它，几秒内自动完成校准；
    如果找不到指针，会提示你在画面里精确点一下指针。
-5. 如果网页里的 **主屏幕** 回不到主屏幕（iOS 27 不响应指针从底边上滑，`cmd+h` 也无效），改用辅助触控：
+5. 如果网页里的 **主屏幕** 回不到主屏幕（iOS 27 不响应指针从底边上滑，`cmd+h` 也无效），先试 `HOME_METHOD=key`：
+   板子发送消费类 Home 键（用法 0x0040，Apple 配件设计指南中对应主屏幕按钮）。若你的手机上无效，再改用辅助触控：
    设置 `HOME_METHOD=assistivetouch` 和 `ASSISTIVETOUCH_BUTTON`（悬浮按钮的位置），再二选一：
    - `ASSISTIVETOUCH_MENU_HOME`：菜单里"主屏幕"的位置（在网页里点一下按钮即可看到），或
    - 在手机上设置 **辅助触控 → 自定操作 → 轻点一下 → 主屏幕**，不设菜单位置。
    请在亮色画面（如主屏幕）上校准：暗色画面里很难找到指针。之后不要移动按钮；移动了就更新设置。
+6. 建议在 **辅助触控** 中：*闲置时不透明度* 设为 100 %（半透明按钮难以点中和识别）；在 **指针样式** 中把指针调大、
+   换成醒目的颜色，并关闭 *自动隐藏*（在暗色画面里更容易找到）。
 
 ### 4. 下达任务
 
@@ -161,7 +164,7 @@ set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 | `HOST` / `PORT` | `0.0.0.0` / `8890` | 网页监听地址和端口（`HOST=127.0.0.1`：仅本机可访问） |
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | 板子连接的地址和端口 |
 | `HIDAGENT_DATA` | `~/.hidagent` | 校准数据、密钥和调试记录 |
-| `HOME_METHOD` | `swipe` | 回到主屏幕的方式：`swipe`（从底边上滑）或 `assistivetouch`（点辅助触控按钮，见"设置手机"），用于不响应指针上滑的 iOS 版本 |
+| `HOME_METHOD` | `swipe` | 回到主屏幕的方式：`swipe`（从底边上滑）、`key`（板子的消费类 Home 键）或 `assistivetouch`（点辅助触控按钮），见"设置手机"；用于不响应指针上滑的 iOS 版本 |
 | `ASSISTIVETOUCH_BUTTON` / `ASSISTIVETOUCH_MENU_HOME` | — | 仅 `assistivetouch`：按钮和菜单"主屏幕"项的位置，`x,y` 屏幕比例（如 `0.9,0.27`）。若按钮"轻点一下"已设为主屏幕，可不设菜单项 |
 | `GATE_MODE` | `off` | `observe`：每个动作都询问 Jev 并记录答案，见"动作闸门" |
 | `POINTER_MODE` | `relative` | 板子用 `ABSOLUTE_POINTER=1` 编译时设为 `absolute`（实验性，见"刷固件"）；须与板子一致 |
@@ -246,7 +249,8 @@ board  -> <回复> <HMAC(session, "reply:<n>:<回复>") 的前 32 位十六进�
 | `press` / `release` / `click` | 左键按下 / 松开 / 点击 |
 | `scroll <v> <h>` | 滚轮 |
 | `type <text>` | 输入 ASCII 文字 |
-| `key <combo>` | 按键，例如 `enter`、`cmd+h`、`cmd+space` |
+| `key <combo>` | 按键，例如 `enter`、`cmd+space`、`ctrl+space`（切换到下一个键盘语言）；`globe` 像修饰键一样按住，例如 `globe+h` |
+| `consumer <key>` | 消费类按键：`home`（0x0040，主屏幕按钮）、`search`（0x0221，聚焦搜索）、`globe`（0x029D，地球键）、`keyboard`（0x01AE，显示/隐藏屏幕键盘），或原始用法 `0x0001`-`0x03ff` |
 
 Wi-Fi 断开时，板子会松开所有按键并自动重连。手机锁屏时 USB 会休眠：板子会先尝试唤醒手机，唤醒不了就立刻回复 `err phone usb asleep`，不会卡住等待。万一板子没有响应，看门狗会让它自动重启。
 
