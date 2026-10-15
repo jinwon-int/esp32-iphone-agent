@@ -102,7 +102,8 @@ instead of a relative mouse; set `POINTER_MODE=absolute` on the server to match.
 positions and needs no calibration or pointer search. Whether iOS maps it to the whole screen is still being
 measured on a real phone (#14); the relative mouse stays the default. iOS 18 or newer is needed for an absolute
 pointer, and the phone should stay in portrait (turn on Portrait Orientation Lock): after a rotation the mapping
-can be off.
+can be off. To compare the two, run `POST /api/bench/pointer` in each mode on the Home Screen: it moves the pointer
+to nine spots without clicking and returns the miss per spot and the move time p50/p90 as a Markdown table.
 
 ### 2. Install and start the server
 

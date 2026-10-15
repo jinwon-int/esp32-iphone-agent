@@ -36,6 +36,7 @@ POINTER_MODES = ("relative", "absolute")
 ABS_MAX = 32767         # the absolute pointer's logical range on each axis (board: ABS_MAX)
 ABS_STEP = 0.03         # screen fraction per absolute report while dragging, so iOS sees a moving finger, not a jump
 ABS_STEP_S = 0.008      # seconds between those reports (the relative mouse's pace, STEP_MS on the board)
+ABS_NUDGE = 0.025       # screen fraction the absolute pointer is nudged by to find it on screen
 ABS_TAP_SETTLE = 0.03   # seconds the absolute pointer rests on the target before pressing, so iOS sees it arrive
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
 MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
@@ -187,23 +188,38 @@ class Phone:
         if aim and self.screen is not None:
             await self._aim(x, y)
 
-    async def _aim(self, x: float, y: float) -> None:
-        """Closed loop: find the real pointer on screen, fix a miss, and learn the error for later moves."""
-        nudge = NUDGE if x < 0.9 else -NUDGE  # stay clear of the screen edge
+    async def locate(self, x: float, y: float) -> tuple[float, float] | None:
+        """Where the pointer really is, after pointing at x, y: nudge it sideways and compare two frames.
+
+        None when it cannot be seen (no live screen, no new frame, or no pointer-sized change). Moves nothing for good:
+        the pointer is put back where it was.
+        """
+        if self.screen is None or not self.screen.live:
+            return None
+        if self.absolute:
+            nudge, shift = 0, ABS_NUDGE if x < 0.9 else -ABS_NUDGE  # stay clear of the screen edge
+        else:
+            nudge = NUDGE if x < 0.9 else -NUDGE
+            shift = nudge / self.span["w"]
         await self.screen.settled(quiet=0.15, least=0.1, most=0.6)  # pointer at rest
         before, sent = self.screen.frame, time.time()
-        await self.device.send(f"move {nudge} 0")
+        await (self._at(x + shift, y) if self.absolute else self.device.send(f"move {nudge} 0"))
         after = await self.screen.fresh(sent, 0.6)
         if after:
             await self.screen.settled(quiet=0.1, least=0.05, most=0.4)
             after = self.screen.frame
-        await self.device.send(f"move {-nudge} 0")
-        shift = nudge / self.span["w"]
+        await (self._at(x, y) if self.absolute else self.device.send(f"move {-nudge} 0"))
         found = before and after and (vision.pointer(before, after, (x, y), shift)  # near the target first,
                                       or vision.pointer(before, after, (0.5, 0.5), shift, reach=(0.5, 0.5)))  # anywhere
         if not found:
-            log.debug("aim (%.3f, %.3f): pointer not found (%s)", x, y,
+            log.debug("locate (%.3f, %.3f): pointer not found (%s)", x, y,
                       "no new frame after the nudge" if not after else "no pointer-sized change near the target")
+        return found or None
+
+    async def _aim(self, x: float, y: float) -> None:
+        """Closed loop: find the real pointer on screen, fix a miss, and learn the error for later moves."""
+        found = await self.locate(x, y)
+        if not found:
             return
         fx, fy = found
         log.debug("aim (%.3f, %.3f): pointer at (%.3f, %.3f)", x, y, fx, fy)
