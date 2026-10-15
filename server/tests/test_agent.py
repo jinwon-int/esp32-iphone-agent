@@ -426,3 +426,32 @@ def test_agent_settle_waits_for_a_frame_after_its_own_action(monkeypatch):
     agent.task = "t"
     asyncio.run(agent._step())
     assert seen["since"] is not None and seen["since"] <= seen["tapped_at"]  # from before the action, not after
+
+
+def test_settle_options_read_only_the_set_variables():
+    from hidagent.agent import settle_options
+
+    assert settle_options({}) == {}
+    assert settle_options({"SETTLE_FIRST": "0.6", "SETTLE_QUIET": " ", "SETTLE_MOST": "2"}) == {"first": 0.6,
+                                                                                                "most": 2.0}
+
+
+def test_agent_settle_passes_the_configured_waits_to_the_screen():
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    seen = {}
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+        async def settled(self, **kw):
+            seen.update(kw)
+            return 0.2, True
+
+    agent = Agent(phone=None, screen=Screen(), actor=None, planner=None, trace=Trace(None),
+                  settle={"first": 0.6, "quiet": 0.2})
+    agent._acted_at = 123.0
+    asyncio.run(agent._settle())
+    assert seen == {"since": 123.0, "first": 0.6, "quiet": 0.2}
