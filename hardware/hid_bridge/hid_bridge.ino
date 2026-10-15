@@ -55,13 +55,18 @@ const long ABS_MAX = 32767;  // logical range of the absolute pointer's x and y
 
 const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the board instead of staying offline
 
+// Declared first on purpose (#17-E): arduino-esp32 registers each HID function in its constructor, so declaration
+// order is descriptor order, and the first USBHID constructed sets the interface protocol. Keyboard first makes the
+// descriptor start with the keyboard collection and the interface protocol KEYBOARD. With the mouse first, iOS adopted
+// the board as an AssistiveTouch pointer only: no "Hardware Keyboard" in Settings, Shift ignored, and typing always
+// read with the primary language's layout (same as adafruit/Adafruit_nRF52_Arduino#870). Device test pending.
+USBHIDKeyboard keyboard;
 #if ABSOLUTE_POINTER
 USBHIDAbsoluteMouse mouse;  // one mouse per build: both kinds share the HID report id
 long absX = 0, absY = 0;    // where the absolute pointer is
 #else
 USBHIDMouse mouse;
 #endif
-USBHIDKeyboard keyboard;
 USBHIDConsumerControl consumer;
 // Consumer-page keys Apple maps for keyboards (Accessory Design Guidelines, table 14-3). Not the library's
 // CONSUMER_CONTROL_HOME (0x0223, AC Home): Apple's Home Button is 0x0040 (Menu).
@@ -298,8 +303,8 @@ void setup() {
 #if DEBUG_SERIAL
   Serial.begin(115200);
 #endif
-  mouse.begin();
   keyboard.begin();
+  mouse.begin();
   consumer.begin();
   USB.productName("HID Bridge");
   USB.begin();
