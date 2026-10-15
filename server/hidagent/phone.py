@@ -1,14 +1,18 @@
-"""Touch-like gestures on the phone, built from relative mouse moves.
+"""Touch-like gestures on the phone, built from relative mouse moves (or absolute pointer positions).
 
 The pointer is relative, so the server tracks where it is (in mouse units) and moves
 from there; every few gestures it slams it into the top-left corner (`home`) again to
 cancel drift. Coordinates are fractions of the screen (0..1, origin top-left), so they
 work for any frame size.
+
+With a board built as an absolute pointer (``ABSOLUTE_POINTER=1``, ``POINTER_MODE=absolute``, #14) the server
+sends screen positions instead (``at x y``, 0..32767): no homing, no calibration, no pointer search.
 """
 
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from collections import deque
@@ -28,6 +32,10 @@ TAP_GAP = 0.15          # seconds to stay still after a click, so iOS sees a fin
 NUDGE = 12              # mouse units the pointer is wiggled by to find it on screen
 AIM_TOLERANCE = 0.008   # screen fraction; a bigger miss is corrected before pressing
 MAX_MISS = 0.06         # bigger misses are still corrected, but not learned from (they may be misreadings)
+POINTER_MODES = ("relative", "absolute")
+ABS_MAX = 32767         # the absolute pointer's logical range on each axis (board: ABS_MAX)
+ABS_STEP = 0.03         # screen fraction per absolute report while dragging, so iOS sees a moving finger, not a jump
+ABS_STEP_S = 0.008      # seconds between those reports (the relative mouse's pace, STEP_MS on the board)
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
 MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
 
@@ -79,9 +87,13 @@ class HomeVia:
 
 
 class Phone:
-    def __init__(self, device: Device, calibration_file: Path, screen=None, home: HomeVia | None = None):
+    def __init__(self, device: Device, calibration_file: Path, screen=None, home: HomeVia | None = None,
+                 pointer: str = "relative"):
+        if pointer not in POINTER_MODES:
+            raise ValueError(f"POINTER_MODE must be 'relative' or 'absolute', not {pointer!r}")
         self.device, self._file, self.screen = device, calibration_file, screen
         self.home = home or HomeVia()
+        self.absolute = pointer == "absolute"
         # mouse units needed to cross the full screen width / height
         saved = json.loads(calibration_file.read_text()) if calibration_file.exists() else None
         self.span = {"w": saved["w"], "h": saved["h"]} if saved else None
@@ -95,15 +107,17 @@ class Phone:
 
     @property
     def calibrated(self) -> bool:
-        return self.span is not None
+        return self.absolute or self.span is not None
 
     async def start_calibration(self) -> bool:
         """Find the pointer on screen at two known distances from the corner and fit the mapping from both.
 
         Two points give the scale and the offset, which one point cannot (iOS pointer motion is not exactly
         proportional). Returns True when it calibrated itself; otherwise the user clicks the pointer
-        (finish_calibration).
+        (finish_calibration). An absolute pointer needs no calibration.
         """
+        if self.absolute:
+            return True
         self._pos = None
         await self.device.send("home")
         seen = []
@@ -158,6 +172,9 @@ class Phone:
     async def point(self, x: float, y: float, aim: bool = False) -> None:
         if not self.calibrated:
             raise RuntimeError("pointer not calibrated")
+        if self.absolute:  # lands where it is sent: nothing to aim
+            await self._at(x, y)
+            return
         await self._move_to(self._dx(x), self._dy(y))
         if aim and self.screen is not None:
             await self._aim(x, y)
@@ -217,6 +234,10 @@ class Phone:
         await self.device.send(f"move {tx - x} {ty - y}")
         self._pos, self._moves = (tx, ty), self._moves + 1
 
+    async def _at(self, x: float, y: float) -> None:
+        ax, ay = (round(min(max(t, 0), 1) * ABS_MAX) for t in (x, y))
+        await self.device.send(f"at {ax} {ay}")
+
     async def reset(self) -> None:
         """Let go of the button and re-home the pointer, whatever state a gesture left."""
         self._pos = None
@@ -242,7 +263,15 @@ class Phone:
         await self.point(*points[0])
         await self.device.send("press")
         try:
+            last = points[0]
             for x, y in points[1:]:
+                if self.absolute:  # glide there in small steps: one jump would be a teleport, not a swipe
+                    n = max(1, math.ceil(math.dist(last, (x, y)) / ABS_STEP - 1e-9))  # 0.3 / 0.03 is 10.000…02
+                    for i in range(1, n + 1):
+                        await self._at(last[0] + (x - last[0]) * i / n, last[1] + (y - last[1]) * i / n)
+                        await asyncio.sleep(ABS_STEP_S)
+                    last = (x, y)
+                    continue
                 await self._move_to(self._dx(x), self._dy(y), rehome=False)  # never home mid-drag
             if hold:
                 await asyncio.sleep(HOLD)
