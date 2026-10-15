@@ -50,6 +50,8 @@ def pointer(before: bytes, after: bytes, near: tuple[float, float], shift: float
     rx, ry = reach
     left, top = max(0, int((near[0] - rx) * w)), max(int(0.05 * h), int((near[1] - ry) * h))  # skip the status bar
     box = (left, top, min(w, int((near[0] + rx) * w)), min(h, int((near[1] + ry) * h)))
+    if box[2] <= box[0] or box[3] <= box[1]:  # `near` is off the screen: nothing to search (PIL would raise, #17-C)
+        return None
     diff = ImageChops.difference(a.crop(box), b.crop(box)).tobytes()
     bw = box[2] - box[0]
     hits = [(i % bw, i // bw) for i, v in enumerate(diff) if v > 30]

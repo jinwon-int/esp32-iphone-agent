@@ -307,3 +307,45 @@ def test_start_launches_the_run_and_the_run_id_counts_runs():
         assert agent._run_id == before + 2
 
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("line", ["tap 63 1218", "tap 295 1046", "tap -5 100", "swipe 0 0 1001 5",
+                                  "path 1 2 3 1200", "circle 500 500 1500"])
+def test_parse_rejects_off_screen_coordinates(line):
+    from hidagent.agent import OffScreen
+
+    with pytest.raises(OffScreen):
+        parse_command(line)
+
+
+def test_parse_accepts_the_screen_edges():
+    assert parse_command("tap 0 1000") == {"action": "tap", "x": 0, "y": 1000}
+
+
+def test_actor_is_asked_again_after_an_off_screen_reply():
+    """#17-C: the actor answered "tap 63 1218"; it must be told why and asked again, never acted on."""
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+
+    class Actor:
+        model = "fake"
+
+        def __init__(self):
+            self.prompts = []
+            self.replies = ["THINK: the globe key\nDO: tap 63 1218", "THINK: the globe key\nDO: tap 63 975"]
+
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            self.prompts.append(text)
+            return self.replies.pop(0)
+
+    actor = Actor()
+    agent = Agent(phone=None, screen=Screen(), actor=actor, planner=actor, trace=Trace(None))
+    agent.task = "t"
+    acts = asyncio.run(agent._next_actions())
+    assert [(a["action"], a["x"], a["y"]) for a in acts] == [("tap", 63, 975)]
+    assert "0-1000" in actor.prompts[-1] and "0-1000" not in actor.prompts[0].split("Next action?")[-1]

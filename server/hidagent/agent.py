@@ -87,6 +87,10 @@ TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the l
 TEXT_ARGS = ("text", "combo", "answer", "reason")
 
 
+class OffScreen(ValueError):
+    """A coordinate outside 0-1000: the actor misjudged the screen; ask it again instead of acting off-screen."""
+
+
 def parse_command(line: str) -> dict:
     """One DO line, e.g. "tap 152 362" -> {"action": "tap", "x": 152, "y": 362}."""
     name, _, rest = line.strip().partition(" ")
@@ -97,6 +101,8 @@ def parse_command(line: str) -> dict:
     if keys and keys[0] in TEXT_ARGS:
         return {"action": name, keys[0]: rest.strip().strip('"')}
     numbers = [int(float(n)) for n in re.findall(r"-?\d+(?:\.\d+)?", rest)]
+    if any(not 0 <= n <= 1000 for n in numbers):  # e.g. "tap 63 1218" (#17-C): never act off the screen
+        raise OffScreen(f"{name} coordinates must be 0-1000: {line[:100]}")
     if keys == ("points",):
         if len(numbers) < 4 or len(numbers) % 2:
             raise ValueError(f"path needs 2+ x y pairs: {line[:100]}")
@@ -337,6 +343,9 @@ class Agent:
                 acts = parse_actions(reply)
             except ValueError as e:
                 log.warning("unparseable actor reply (%s): %s", e, reply[:200])
+                if isinstance(e, OffScreen):
+                    prompt += (f"\n\nYour last reply was not used: {e}. The screenshot spans 0-1000 on both axes "
+                               "(0,0 top-left, 1000,1000 bottom-right); give positions inside it.")
                 continue
             if self._missed() and _key(acts[0]) == _key(self.steps[-1]):  # same move that just did nothing
                 log.info("actor repeated an action that changed nothing; asking for another")
