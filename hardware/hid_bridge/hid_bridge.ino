@@ -7,6 +7,9 @@
 //   at <x> <y>   (ABSOLUTE_POINTER builds only: put the pointer at x, y in 0..32767 across the screen)
 //   consumer <home | search | globe | keyboard | 0x0001..0x03ff>   (a consumer-page key, see consumerUsage)
 //   key combos may include "globe" (held as a modifier, e.g. globe+h)
+//   input-language keys for a hardware keyboard (#17-E): capslock | lang1 (alias hangul, HID 0x90 Hangul/English,
+//   Kana on Apple keyboards) | lang2 (HID 0x91 Hanja, Eisu on Apple keyboards) -- which one iOS honours is a
+//   device test, not something this firmware assumes
 //
 // ABSOLUTE_POINTER=1 builds an absolute pointer (like a tablet) instead of a relative mouse (#14): the server
 // then sends screen positions and needs no calibration. In that build `home` goes to the top-left corner and
@@ -100,7 +103,15 @@ uint8_t keyCode(const String &k) {
   if (k == "ctrl") return KEY_LEFT_CTRL;
   if (k == "alt") return KEY_LEFT_ALT;
   if (k == "shift") return KEY_LEFT_SHIFT;
+  if (k == "capslock") return KEY_CAPS_LOCK;
   return k.length() == 1 ? k[0] : 0;
+}
+
+// Keys the Arduino keyboard API cannot press by name (usage IDs above its 0x88 offset range): sent as raw usages.
+uint8_t rawKeyCode(const String &k) {
+  if (k == "lang1" || k == "hangul") return 0x90;  // Keyboard LANG1
+  if (k == "lang2") return 0x91;                    // Keyboard LANG2
+  return 0;
 }
 
 uint16_t consumerUsage(const String &k) {
@@ -124,6 +135,10 @@ bool pressCombo(String combo) {
       consumer.press(CONSUMER_GLOBE);
       globe = true;
       delay(10);
+      continue;
+    }
+    if (uint8_t raw = rawKeyCode(k)) {
+      keyboard.pressRaw(raw);
       continue;
     }
     uint8_t c = keyCode(k);
