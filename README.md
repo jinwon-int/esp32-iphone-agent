@@ -308,7 +308,7 @@ running it; the server drops the link on a wrong reply tag. Long text is typed i
 | `press` / `release` / `click` | Left button down / up / both |
 | `scroll <v> <h>` | Scroll wheel |
 | `type <text>` | Type ASCII text |
-| `key <combo>` | Press keys, e.g. `enter`, `cmd+space`, `ctrl+space` (next keyboard language); `globe` is held like a modifier, e.g. `globe+h` |
+| `key <combo>` | Press keys, e.g. `enter`, `cmd+space`, `ctrl+space`; `globe` is held like a modifier, e.g. `globe+h`. Input-language keys for the board as a hardware keyboard: `capslock`, `lang1` (alias `hangul`, HID 0x90), `lang2` (HID 0x91). On iOS 27 `ctrl+space` and the Globe key switch only the on-screen keyboard; the board's typing kept the Korean layout (#17) |
 | `consumer <key>` | A consumer-page key: `home` (0x0040, Home Button), `search` (0x0221, Spotlight), `globe` (0x029D, Globe key), `keyboard` (0x01AE, show/hide the on-screen keyboard), or a raw usage `0x0001`-`0x03ff` |
 
 If the Wi-Fi link drops, the board releases all buttons and reconnects on its own. While the phone is locked, its USB
