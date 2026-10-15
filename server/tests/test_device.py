@@ -359,13 +359,16 @@ def test_cancelled_command_drops_the_link_instead_of_desynchronising():
 
 
 def test_non_ascii_text_is_refused_clearly():
-    """Re-review N5: 200 characters of UTF-8 could exceed the byte limit; the keyboard is ASCII-only anyway."""
+    """Re-review N5: 200 characters of UTF-8 could exceed the byte limit; the keyboard sends ASCII only.
+
+    Korean is no longer refused: it is converted to 2-set layout keys, which are ASCII (#17-E, test_hangul).
+    """
     from hidagent.phone import Phone
 
     phone = Phone.__new__(Phone)
     phone.device = None  # never reached
     with pytest.raises(DeviceError, match="ASCII"):
-        asyncio.run(phone.type("안녕하세요"))
+        asyncio.run(phone.type("こんにちは"))
 
 
 def test_flood_from_many_addresses_cannot_lock_the_board_out():
