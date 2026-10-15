@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import auth, bench, vision
-from .agent import Agent
+from .agent import Agent, settle_options
 from .debug import Trace
 from .device import Device, DeviceError
 from .gate import Gate
@@ -68,7 +68,8 @@ except ValueError as e:
     raise SystemExit(str(e)) from None
 ocr = OCR.from_env()  # optional: text on the screen with coordinates (pip install -e '.[ocr]')
 agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
-              Trace(DATA_DIR / "traces" if DEBUG else None), gate=Gate.from_env(DATA_DIR), ocr=ocr)
+              Trace(DATA_DIR / "traces" if DEBUG else None), gate=Gate.from_env(DATA_DIR), ocr=ocr,
+              settle=settle_options())
 
 
 @asynccontextmanager

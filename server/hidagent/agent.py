@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
 import time
 
@@ -147,9 +148,22 @@ class BlindError(RuntimeError):
     """The screen feed is gone; acting now would be guessing."""
 
 
+SETTLE_ENV = {"quiet": "SETTLE_QUIET", "least": "SETTLE_LEAST", "most": "SETTLE_MOST", "first": "SETTLE_FIRST"}
+
+
+def settle_options(env=os.environ) -> dict[str, float]:
+    """The wait after each step, from SETTLE_* (seconds); unset ones keep the screen's own defaults.
+
+    For measuring on a device (#17 speed): shorter waits save time per step but risk deciding on a screen that
+    is still moving, which the step's ``stable`` field shows.
+    """
+    return {key: float(env[name]) for key, name in SETTLE_ENV.items() if env.get(name, "").strip()}
+
+
 class Agent:
     def __init__(self, phone: Phone, screen: Screen, actor: LLM, planner: LLM, trace: Trace,
-                 max_steps: int = 40, max_failures: int = 3, gate: Gate | None = None, ocr=None):
+                 max_steps: int = 40, max_failures: int = 3, gate: Gate | None = None, ocr=None,
+                 settle: dict[str, float] | None = None):
         self.phone, self.screen, self.actor, self.planner = phone, screen, actor, planner
         self.trace = trace
         self.gate = gate  # optional second opinion on each action (observe only: never changes what is done)
@@ -157,6 +171,7 @@ class Agent:
         self._run_id = 0  # bumped per run, so a late gate answer never lands in a newer run's steps
         # (not `_run`: that name is the coroutine method below; a counter there made start() raise TypeError)
         self.max_steps, self.max_failures = max_steps, max_failures
+        self.settle = settle or {}  # keyword overrides for screen.settled() after a step (SETTLE_* variables)
         self.task, self.plan, self.steps = "", "", []
         self.shots: dict[int, bytes] = {}  # step index -> screenshot the model decided on
         self._pointer = (0.0, 0.0)  # last pointer position (screen fractions)
@@ -277,7 +292,7 @@ class Agent:
         Measurement only (never shown to the actor or the gate): ``settle_s`` is the wait, ``stable`` False when
         the screen was still changing when the wait gave up, e.g. a loading screen the next decision was made on.
         """
-        result = await self.screen.settled(since=self._acted_at)
+        result = await self.screen.settled(since=self._acted_at, **self.settle)
         if isinstance(result, tuple) and self.steps:
             self.steps[-1]["settle_s"], self.steps[-1]["stable"] = result
 

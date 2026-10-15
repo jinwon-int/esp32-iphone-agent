@@ -1,9 +1,12 @@
 import asyncio
+import base64
+import io
 import json
 
 import httpx
+from PIL import Image
 
-from hidagent.llm import LLM
+from hidagent.llm import LLM, shrink
 
 
 def fake_server(llm: LLM, wants: str) -> list[dict]:
@@ -51,3 +54,46 @@ def test_extra_body_and_image_are_sent():
     body = seen[0]
     assert body["reasoning_effort"] == "none"
     assert body["messages"][1]["content"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def jpeg(w: int, h: int) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (w, h), (200, 30, 30)).save(out, "JPEG")
+    return out.getvalue()
+
+
+def sent_size(body: dict) -> tuple[int, int]:
+    url = body["messages"][1]["content"][0]["image_url"]["url"]
+    return Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).size
+
+
+def test_image_is_sent_as_received_by_default():
+    llm = LLM("http://test/v1", "gpt")
+    seen = fake_server(llm, "max_tokens")
+    asyncio.run(llm.chat("sys", "hi", image=jpeg(590, 1280)))
+    assert sent_size(seen[0]) == (590, 1280)
+
+
+def test_image_max_side_shrinks_keeping_the_aspect():
+    llm = LLM("http://test/v1", "gpt", image_max=640)
+    seen = fake_server(llm, "max_tokens")
+    asyncio.run(llm.chat("sys", "hi", image=jpeg(590, 1280)))
+    w, h = sent_size(seen[0])
+    assert h == 640 and abs(w - 295) <= 1
+
+
+def test_shrink_leaves_small_or_unreadable_frames_alone():
+    small = jpeg(300, 600)
+    assert shrink(small, 640) is small
+    assert shrink(b"\xff\xd8jpeg", 640) == b"\xff\xd8jpeg"
+    assert shrink(small, 0) is small
+
+
+def test_image_max_side_from_env_role_overrides_shared(monkeypatch):
+    monkeypatch.setenv("LLM_IMAGE_MAX_SIDE", "1024")
+    monkeypatch.setenv("ACTOR_IMAGE_MAX_SIDE", "512")
+    monkeypatch.delenv("PLANNER_IMAGE_MAX_SIDE", raising=False)
+    assert LLM.from_env("ACTOR").image_max == 512
+    assert LLM.from_env("PLANNER").image_max == 1024
+    monkeypatch.delenv("LLM_IMAGE_MAX_SIDE")
+    assert LLM.from_env("PLANNER").image_max == 0
