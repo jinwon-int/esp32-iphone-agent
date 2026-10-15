@@ -74,7 +74,9 @@ Actions:
                              reply, not backspace again and again
   home | back | wait
   replan                    (the plan no longer fits the screen)
-  done ANSWER               (the goal is reached; ANSWER is the result for the user)
+  done ANSWER               (the goal is reached; ANSWER is the result for the user. Before done, read the
+                             screen's title or name and check it is exactly the item the goal names, not a
+                             neighbouring row; if it is another item, go back and open the right one instead)
   confirm REASON            (the next step would pay, send, delete or change account settings: stop here
                              and say what is ready for the user to confirm; never do that step yourself)
   fail REASON

@@ -397,6 +397,14 @@ def test_actor_is_asked_again_after_an_off_screen_reply():
     assert "0-1000" in actor.prompts[-1] and "0-1000" not in actor.prompts[0].split("Next action?")[-1]
 
 
+def test_actor_prompt_asks_to_check_the_item_name_before_done():
+    """#17 on-device: a mis-tap opened the neighbouring TestFlight row and the actor reported that app's version."""
+    from hidagent.agent import ACTOR_PROMPT
+
+    done = ACTOR_PROMPT[ACTOR_PROMPT.index("  done ANSWER"):ACTOR_PROMPT.index("  confirm REASON")]
+    assert "exactly the item the goal names" in done and "go back" in done
+
+
 def test_agent_settle_waits_for_a_frame_after_its_own_action(monkeypatch):
     import asyncio
     import time
