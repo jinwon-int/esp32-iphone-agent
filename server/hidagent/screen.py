@@ -45,8 +45,14 @@ class Frames:
             return 9 / 19.5
         return int.from_bytes(f[i + 7:i + 9], "big") / int.from_bytes(f[i + 5:i + 7], "big")
 
-    async def settled(self, quiet: float = 0.35, least: float = 0.25, most: float = 4) -> tuple[float, bool]:
+    async def settled(self, quiet: float = 0.35, least: float = 0.25, most: float = 4,
+                      since: float | None = None, first: float = 1.0) -> tuple[float, bool]:
         """Wait until the screen stops changing (sources only send frames on change).
+
+        ``since`` (when the action began): if no frame newer than that has arrived yet, first wait up to ``first``
+        seconds for one. The phone's reaction can reach the server later than ``least`` (seen on a device with
+        the pushed screen, #17-F); without this the wait ended at once on the frame from *before* the action, and
+        the next decision was made on it. An action that changes nothing costs at most ``first``.
 
         Returns ``(waited seconds, stable)``: ``stable`` is False when the wait gave up at ``most`` while frames
         were still arriving (an animation or a loading screen), so a step can say so instead of pretending the
@@ -54,6 +60,9 @@ class Frames:
         """
         started = time.time()
         await asyncio.sleep(least)
+        if since is not None:
+            while self.updated <= since and time.time() - started < min(first, most):
+                await asyncio.sleep(0.05)
         while time.time() - self.updated < quiet and time.time() - started < most:
             await asyncio.sleep(0.1)
         return round(time.time() - started, 2), time.time() - self.updated >= quiet

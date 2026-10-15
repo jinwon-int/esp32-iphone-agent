@@ -66,7 +66,7 @@ def test_actions_report_settle_and_whether_the_screen_changed(web, monkeypatch):
         @property
         def frame(self):
             return frames["now"]
-        async def settled(self):
+        async def settled(self, **_):
             return 0.42, True
 
     class FakePhone:
@@ -100,7 +100,7 @@ def test_action_without_a_live_frame_reports_unknown_change(web, monkeypatch):
 
     class NoScreen:
         live, aspect, frame = False, 0.46, None
-        async def settled(self):
+        async def settled(self, **_):
             return 0.25, True
 
     class FakePhone:
@@ -123,7 +123,7 @@ def test_action_errors_are_409_with_the_reason(web, monkeypatch):
 
     class FakeScreen:
         live, aspect, frame = True, 0.46, jpeg((1, 2, 3))
-        async def settled(self):
+        async def settled(self, **_):
             return 0.0, True
 
     monkeypatch.setattr(module, "screen", FakeScreen())

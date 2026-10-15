@@ -177,7 +177,7 @@ class Phone:
 class Screen:
     live, frame, aspect = True, b"jpeg", 0.46
 
-    async def settled(self):
+    async def settled(self, **_):
         pass
 
 

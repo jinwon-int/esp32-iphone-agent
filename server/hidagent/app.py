@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -174,12 +175,12 @@ async def act(coro, *spots: tuple[float, float]):
     pointer's own movement does not count as the screen changing. ``screen_changed`` is None without a live
     frame before and after.
     """
-    before = screen.frame
+    before, since = screen.frame, time.time()
     try:
         await coro
     except (DeviceError, RuntimeError) as e:
         raise HTTPException(409, str(e)) from e
-    settled = await screen.settled()
+    settled = await screen.settled(since=since)  # the change may reach us later than the default wait (#17-F)
     waited, stable = settled if isinstance(settled, tuple) else (None, None)
     after = screen.frame
     changed = vision.changed(before, after, ignore=spots) if before and after else None

@@ -113,7 +113,7 @@ def test_confirm_ends_the_run_without_acting_or_asking_the_gate():
 
     class Screen:
         live, frame, aspect = True, b"jpeg", 0.46
-        async def settled(self):
+        async def settled(self, **_):
             return 0.3, True
 
     class Phone:
@@ -151,7 +151,7 @@ def test_settle_telemetry_is_recorded_but_hidden_from_the_actor_and_the_action_k
 
     class Screen:
         live, frame, aspect = True, b"jpeg", 0.46
-        async def settled(self):
+        async def settled(self, **_):
             return 1.2, False  # still changing when the wait gave up
 
     class Phone:
@@ -183,7 +183,7 @@ def test_settle_tolerates_a_screen_that_returns_nothing():
 
     class Screen:
         live, frame, aspect = True, b"jpeg", 0.46
-        async def settled(self):
+        async def settled(self, **_):
             return None
 
     agent = Agent(phone=None, screen=Screen(), actor=None, planner=None, trace=Trace(None))
@@ -212,6 +212,52 @@ def test_frames_settled_reports_wait_and_stability():
 
     waited, stable = asyncio.run(keep_changing())
     assert stable is False and waited >= 0.3
+
+
+def test_frames_settled_waits_for_the_first_frame_after_the_action():
+    """#17-F on the device: the change reached the server after `least`, so the wait ended on the old frame."""
+    import asyncio
+    import time
+
+    from hidagent.screen import Screen
+
+    s = Screen("Agent")
+    s.frame, s.updated = b"old", time.time() - 5  # still for a while before the action
+
+    async def late_change():
+        since = time.time()
+        task = asyncio.ensure_future(s.settled(since=since, quiet=0.05, least=0.0, first=1.0))
+        await asyncio.sleep(0.4)
+        s.frame, s.updated = b"new", time.time()
+        return await task, s.frame
+
+    (waited, stable), seen = asyncio.run(late_change())
+    assert waited >= 0.4 and stable is True and seen == b"new"
+
+
+def test_frames_settled_gives_up_waiting_for_a_change_after_first():
+    import asyncio
+    import time
+
+    from hidagent.screen import Screen
+
+    s = Screen("Agent")
+    s.frame, s.updated = b"old", time.time() - 5
+    waited, stable = asyncio.run(s.settled(since=time.time(), quiet=0.05, least=0.0, first=0.3))
+    assert 0.3 <= waited < 0.6 and stable is True  # the action changed nothing: no longer than `first`
+
+
+def test_frames_settled_does_not_wait_when_the_change_already_arrived():
+    import asyncio
+    import time
+
+    from hidagent.screen import Screen
+
+    s = Screen("Agent")
+    since = time.time() - 1
+    s.frame, s.updated = b"new", time.time() - 0.5  # arrived during the action, before the wait began
+    waited, stable = asyncio.run(s.settled(since=since, quiet=0.05, least=0.0, first=1.0))
+    assert waited < 0.2 and stable is True
 
 
 def test_actor_gets_screen_text_only_in_ocr_actor_mode(monkeypatch):
@@ -349,3 +395,34 @@ def test_actor_is_asked_again_after_an_off_screen_reply():
     acts = asyncio.run(agent._next_actions())
     assert [(a["action"], a["x"], a["y"]) for a in acts] == [("tap", 63, 975)]
     assert "0-1000" in actor.prompts[-1] and "0-1000" not in actor.prompts[0].split("Next action?")[-1]
+
+
+def test_agent_settle_waits_for_a_frame_after_its_own_action(monkeypatch):
+    import asyncio
+    import time
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    monkeypatch.setattr("hidagent.agent.vision.changed", lambda *a, **k: True)
+    seen = {}
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+        async def settled(self, **kw):
+            seen.update(kw)
+            return 0.3, True
+
+    class Phone:
+        async def tap(self, x, y, aim=False):
+            seen["tapped_at"] = time.time()
+
+    class Actor:
+        model = "fake"
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            return "THINK: tap it\nDO: tap 100 200"
+
+    agent = Agent(phone=Phone(), screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None))
+    agent.task = "t"
+    asyncio.run(agent._step())
+    assert seen["since"] is not None and seen["since"] <= seen["tapped_at"]  # from before the action, not after

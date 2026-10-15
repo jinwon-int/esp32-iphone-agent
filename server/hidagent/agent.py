@@ -156,6 +156,7 @@ class Agent:
         self.task, self.plan, self.steps = "", "", []
         self.shots: dict[int, bytes] = {}  # step index -> screenshot the model decided on
         self._pointer = (0.0, 0.0)  # last pointer position (screen fractions)
+        self._acted_at: float | None = None  # when the last action began: the settle waits for a frame after it
         self._job: asyncio.Task | None = None
 
     @property
@@ -245,7 +246,7 @@ class Agent:
             check = None
             if name not in TERMINAL:
                 check = self._gate_check(thought, act)  # runs alongside the action, never waited for
-                started = time.time()
+                started = self._acted_at = time.time()
                 await self._do(act)
                 act["act_s"] = round(time.time() - started, 2)
                 spots += _pointer_path(act, getattr(getattr(self.phone, "home", None), "path", None))
@@ -272,7 +273,7 @@ class Agent:
         Measurement only (never shown to the actor or the gate): ``settle_s`` is the wait, ``stable`` False when
         the screen was still changing when the wait gave up, e.g. a loading screen the next decision was made on.
         """
-        result = await self.screen.settled()
+        result = await self.screen.settled(since=self._acted_at)
         if isinstance(result, tuple) and self.steps:
             self.steps[-1]["settle_s"], self.steps[-1]["stable"] = result
 
