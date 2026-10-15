@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import vision
 from .device import Device, DeviceError
+from .hangul import has_hangul, to_dubeolsik
 
 log = logging.getLogger(__name__)
 
@@ -309,8 +310,13 @@ class Phone:
         await self.device.send(f"scroll {lines} 0")
 
     async def type(self, text: str, piece: int = 200) -> None:
+        if has_hangul(text):  # Korean goes out as 2-set layout keys; the phone's input language must be Korean
+            try:
+                text = to_dubeolsik(text)
+            except ValueError as e:
+                raise DeviceError(str(e)) from e
         if not text.isascii():  # the USB keyboard can only type ASCII; fail clearly instead of typing garbage
-            raise DeviceError("only ASCII text can be typed")
+            raise DeviceError("only ASCII or Korean text can be typed")
         for i in range(0, len(text), piece):  # the board takes lines of limited length
             await self.device.send(f"type {text[i:i + piece]}")
 

@@ -349,7 +349,10 @@ web UI work exactly as with AirPlay.
 
 - iOS does not mirror some screens (passcode entry, Apple Pay, DRM video); the agent cannot see them.
 - Mirroring stops when the phone locks; keep auto-lock off while the agent works.
-- Keyboard input is ASCII only.
+- Keyboard input is English (ASCII) or Korean. Korean is sent as Korean 2-set layout keys, so the phone's input
+  language must be Korean for it and English for English (`key ctrl+space` switches; the agent checks the result).
+  This needs the firmware that declares the keyboard first (#17): only then does iOS treat the board as a
+  hardware keyboard and honour Shift and the language switch.
 - Re-calibrate after changing AssistiveTouch tracking speed.
 - Landscape apps are not supported yet: drawings and taps there land in the wrong place.
 - On Linux machines with several network interfaces, limit Avahi (mDNS) to the interface on the phone's network
