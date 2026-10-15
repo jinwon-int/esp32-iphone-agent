@@ -13,7 +13,7 @@ from .debug import Trace
 from .device import DeviceError
 from .gate import Gate
 from .gate import describe as gate_describe
-from .llm import LLM
+from .llm import LLM, image_size, shrink
 from .phone import HOME_SWIPE, Phone
 from .screen import Screen
 
@@ -39,7 +39,8 @@ Give several DO lines (up to 6, run in order) whenever the next actions do not d
 result: e.g. ticking several visible checkboxes or days, several drawing strokes, typing then pressing enter.
 Give ONE DO line when the next action depends on what this one opens or changes.
 
-Coordinates are integers 0-1000 relative to the screenshot (x left->right, y top->bottom).
+Coordinates are integers 0-1000 relative to the screenshot (x left->right, y top->bottom), NOT pixels:
+the request gives the screenshot's pixel size, so convert (x = pixel x * 1000 / width). The centre is 500 500.
 Aim at the visual center of the element you want, not its edge or its label.
 Look before you act: describe what is really on the screen now, not what you expect.
 Each recent action says whether the screen changed after it. If it did NOT change, the action
@@ -341,6 +342,11 @@ class Agent:
         self._record(frame, action="replan (stuck)" if stuck else "plan", plan=self.plan, plan_zh=plan_zh,
                      think_s=seconds)
 
+    def _shown_size(self) -> tuple[int, int] | None:
+        """Pixel size of the screenshot as the actor will see it (after any IMAGE_MAX_SIDE shrinking)."""
+        frame = self.screen.frame
+        return image_size(shrink(frame, getattr(self.actor, "image_max", 0)) if frame else None)
+
     async def _next_actions(self) -> list[dict]:
         # actions and their effect only: echoing earlier thoughts makes the model repeat them instead of looking
         # ("gate" too: in observe mode the gate's opinion must not reach the actor and change what it does)
@@ -358,6 +364,10 @@ class Agent:
             if text:
                 prompt += ("\n\nText read from the screen (OCR; x y = centre of each line in the same 0-1000 "
                            "coordinates; when you tap a word or a row, aim with these instead of estimating):\n" + text)
+        if size := self._shown_size():  # models drift into pixel positions (#17): say what 0-1000 maps onto
+            w, h = size
+            prompt += (f"\n\nThe screenshot is {w}x{h} pixels. Give positions in 0-1000 units, not pixels: "
+                       f"x = pixel x * 1000 / {w}, y = pixel y * 1000 / {h}.")
         prompt += "\n\nNext action?"
         for attempt in range(3):  # retry unparseable replies, a little less deterministically
             reply, seconds, frame = await self._ask("actor", self.actor, ACTOR_PROMPT, prompt, 0.4 * attempt)
@@ -367,7 +377,7 @@ class Agent:
                 log.warning("unparseable actor reply (%s): %s", e, reply[:200])
                 if isinstance(e, OffScreen):
                     prompt += (f"\n\nYour last reply was not used: {e}. The screenshot spans 0-1000 on both axes "
-                               "(0,0 top-left, 1000,1000 bottom-right); give positions inside it.")
+                               "(0,0 top-left, 1000,1000 bottom-right), not pixels; give positions inside it.")
                 continue
             if self._missed() and _key(acts[0]) == _key(self.steps[-1]):  # same move that just did nothing
                 log.info("actor repeated an action that changed nothing; asking for another")

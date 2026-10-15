@@ -97,3 +97,10 @@ def test_image_max_side_from_env_role_overrides_shared(monkeypatch):
     assert LLM.from_env("PLANNER").image_max == 1024
     monkeypatch.delenv("LLM_IMAGE_MAX_SIDE")
     assert LLM.from_env("PLANNER").image_max == 0
+
+
+def test_image_size_reads_jpeg_or_returns_none():
+    from hidagent.llm import image_size
+
+    assert image_size(jpeg(590, 1280)) == (590, 1280)
+    assert image_size(b"\xff\xd8jpeg") is None and image_size(None) is None

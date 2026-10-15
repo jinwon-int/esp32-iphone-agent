@@ -455,3 +455,62 @@ def test_agent_settle_passes_the_configured_waits_to_the_screen():
     agent._acted_at = 123.0
     asyncio.run(agent._settle())
     assert seen == {"since": 123.0, "first": 0.6, "quiet": 0.2}
+
+
+def _actor_prompt_for(frame: bytes, image_max: int = 0) -> str:
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    class Screen:
+        live, aspect = True, 0.46
+
+    Screen.frame = frame
+
+    class Actor:
+        model = "fake"
+
+        def __init__(self):
+            self.image_max, self.prompts = image_max, []
+
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            self.prompts.append(text)
+            return "THINK: tap it\nDO: tap 500 500"
+
+    actor = Actor()
+    agent = Agent(phone=None, screen=Screen(), actor=actor, planner=actor, trace=Trace(None))
+    agent.task = "t"
+    asyncio.run(agent._next_actions())
+    return actor.prompts[0]
+
+
+def _jpeg(w: int, h: int) -> bytes:
+    import io
+
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", (w, h), (10, 10, 10)).save(out, "JPEG")
+    return out.getvalue()
+
+
+def test_actor_is_told_the_pixel_size_it_sees_so_it_answers_in_0_1000():
+    """#17 on-device: the actor tapped (57, 121), the back button's centre in pixels of a 590x1280 frame."""
+    prompt = _actor_prompt_for(_jpeg(590, 1280))
+    assert "The screenshot is 590x1280 pixels" in prompt and "x = pixel x * 1000 / 590" in prompt
+    assert prompt.rstrip().endswith("Next action?")
+
+
+def test_pixel_size_is_the_shrunk_one_when_image_max_side_is_set():
+    assert "The screenshot is 354x768 pixels" in _actor_prompt_for(_jpeg(590, 1280), image_max=768)
+
+
+def test_no_pixel_size_line_when_the_frame_cannot_be_read():
+    assert "pixels. Give positions" not in _actor_prompt_for(b"jpeg")
+
+
+def test_actor_prompt_says_coordinates_are_not_pixels():
+    from hidagent.agent import ACTOR_PROMPT
+
+    assert "NOT pixels" in ACTOR_PROMPT
