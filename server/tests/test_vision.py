@@ -72,3 +72,9 @@ def test_pointer_far_from_the_target_is_found_with_a_full_screen_search():
     assert pointer(before, after, near=(0.9, 0.1), shift=12 / W) is None  # outside the window near the target
     found = pointer(before, after, near=(0.5, 0.5), shift=12 / W, reach=(0.5, 0.5))
     assert found[0] * W == pytest.approx(354, abs=3) and found[1] * H == pytest.approx(136, abs=3)
+
+
+@pytest.mark.parametrize("near", [(63 / 1000, 1.218), (1.2, 0.5), (0.5, -0.2)])
+def test_pointer_search_off_the_screen_finds_nothing_instead_of_failing(near):
+    """#17-C: an off-screen target made PIL's crop raise "Coordinate 'lower' is less than 'upper'"."""
+    assert pointer(screen((262, 856)), screen((274, 856)), near=near, shift=12 / W) is None
