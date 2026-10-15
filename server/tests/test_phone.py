@@ -102,3 +102,12 @@ def test_absolute_drag_glides_in_small_steps(tmp_path, monkeypatch):
 def test_pointer_mode_is_checked():
     with pytest.raises(ValueError):
         Phone(FakeDevice(), None, pointer="tablet")
+
+
+def test_home_via_the_consumer_home_key(tmp_path):
+    via = HomeVia.from_env({"HOME_METHOD": "key"})
+    assert via == HomeVia(key=True) and via.path == []
+    phone, device = make_phone(tmp_path, via)
+    asyncio.run(phone.go_home())
+    assert device.sent == ["consumer home"]  # no pointer moves at all
+    assert _pointer_path({"action": "home"}, via.path) == []

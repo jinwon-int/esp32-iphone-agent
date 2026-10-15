@@ -5,6 +5,8 @@
 //   ping | home | move <dx> <dy> | press | release | click
 //   scroll <v> <h> | type <ascii text> | key <combo, e.g. cmd+h, enter>
 //   at <x> <y>   (ABSOLUTE_POINTER builds only: put the pointer at x, y in 0..32767 across the screen)
+//   consumer <home | search | globe | keyboard | 0x0001..0x03ff>   (a consumer-page key, see consumerUsage)
+//   key combos may include "globe" (held as a modifier, e.g. globe+h)
 //
 // ABSOLUTE_POINTER=1 builds an absolute pointer (like a tablet) instead of a relative mouse (#14): the server
 // then sends screen positions and needs no calibration. In that build `home` goes to the top-left corner and
@@ -28,6 +30,7 @@
 #include "USB.h"
 #include "USBHIDMouse.h"
 #include "USBHIDKeyboard.h"
+#include "USBHIDConsumerControl.h"
 #include "tusb.h"
 #include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVER_HOST, SERVER_PORT, DEVICE_KEY
 
@@ -56,6 +59,10 @@ long absX = 0, absY = 0;    // where the absolute pointer is
 USBHIDMouse mouse;
 #endif
 USBHIDKeyboard keyboard;
+USBHIDConsumerControl consumer;
+// Consumer-page keys Apple maps for keyboards (Accessory Design Guidelines, table 14-3). Not the library's
+// CONSUMER_CONTROL_HOME (0x0223, AC Home): Apple's Home Button is 0x0040 (Menu).
+const uint16_t CONSUMER_HOME = 0x0040, CONSUMER_SEARCH = 0x0221, CONSUMER_GLOBE = 0x029D, CONSUMER_KEYBOARD = 0x01AE;
 WiFiClient server;
 String session;      // per-connection key from the handshake; empty while not authenticated
 uint32_t seq = 0;    // number of the next command in this session
@@ -96,15 +103,36 @@ uint8_t keyCode(const String &k) {
   return k.length() == 1 ? k[0] : 0;
 }
 
+uint16_t consumerUsage(const String &k) {
+  if (k == "home") return CONSUMER_HOME;          // Home Button
+  if (k == "search") return CONSUMER_SEARCH;      // Spotlight
+  if (k == "globe") return CONSUMER_GLOBE;        // Globe key: next keyboard / input language
+  if (k == "keyboard") return CONSUMER_KEYBOARD;  // show / hide the on-screen keyboard
+  if (k.startsWith("0x")) {                       // any usage of the 10-bit consumer report, for experiments
+    long u = strtol(k.c_str() + 2, nullptr, 16);
+    return u > 0 && u <= 0x3FF ? u : 0;
+  }
+  return 0;
+}
+
 bool pressCombo(String combo) {
   combo += '+';
+  bool globe = false;  // the Globe key is a consumer usage, held for the whole combo like a modifier
   for (int i; (i = combo.indexOf('+')) >= 0; combo = combo.substring(i + 1)) {
-    uint8_t c = keyCode(combo.substring(0, i));
-    if (!c) { keyboard.releaseAll(); return false; }
+    String k = combo.substring(0, i);
+    if (k == "globe") {
+      consumer.press(CONSUMER_GLOBE);
+      globe = true;
+      delay(10);
+      continue;
+    }
+    uint8_t c = keyCode(k);
+    if (!c) { keyboard.releaseAll(); consumer.release(); return false; }
     keyboard.press(c);
   }
   delay(30);
   keyboard.releaseAll();
+  if (globe) consumer.release();
   return true;
 }
 
@@ -150,6 +178,14 @@ String run(const String &line) {
   if (cmd == "click") { mouse.press(MOUSE_LEFT); delay(60); mouse.release(MOUSE_LEFT); return "ok"; }
   if (cmd == "type") { keyboard.print(arg); return "ok"; }
   if (cmd == "key") return pressCombo(arg) ? "ok" : "err unknown key";
+  if (cmd == "consumer") {
+    uint16_t u = consumerUsage(arg);
+    if (!u) return "err unknown consumer key";
+    consumer.press(u);
+    delay(40);
+    consumer.release();
+    return "ok";
+  }
   return "err unknown command";
 }
 
@@ -238,6 +274,7 @@ bool handshake() {
 void hangUp() {  // drop the link and anything held down; the loop reconnects
   mouse.release(MOUSE_LEFT);
   keyboard.releaseAll();
+  consumer.release();
   session = "";
   server.stop();
 }
@@ -248,6 +285,7 @@ void setup() {
 #endif
   mouse.begin();
   keyboard.begin();
+  consumer.begin();
   USB.productName("HID Bridge");
   USB.begin();
   esp_task_wdt_config_t wdt = {.timeout_ms = WATCHDOG_MS, .idle_core_mask = 0, .trigger_panic = true};
@@ -265,6 +303,7 @@ void loop() {
   if (!server.connected()) {
     mouse.release(MOUSE_LEFT);  // a gesture cut off mid-way must not leave the button held (long press)
     keyboard.releaseAll();
+    consumer.release();
     session = "";
     if (!server.connect(SERVER_HOST, SERVER_PORT, 1000)) { delay(200); return; }  // retry fast: show up at once
     server.setNoDelay(true);

@@ -63,8 +63,10 @@ Actions:
   swipe X1 Y1 X2 Y2         (finger moves from X1,Y1 to X2,Y2: "swipe down" means Y2 > Y1)
   path X1 Y1 X2 Y2 X3 Y3 …  (one continuous stroke through 2-20 points, for drawing)
   circle X Y R              (draw a circle centered at X Y; R is the radius in x units)
-  type TEXT                 (ASCII only; tap the input field first)
-  key COMBO                 (enter, backspace, esc, cmd+a, ...)
+  type TEXT                 (ASCII only; tap the input field first. If typed letters come out in another
+                             alphabet, e.g. Korean, the keyboard language is wrong: delete them, switch with
+                             key ctrl+space, check the keyboard, then type again)
+  key COMBO                 (enter, backspace, esc, cmd+a, ctrl+space = next keyboard language, ...)
   home | back | wait
   replan                    (the plan no longer fits the screen)
   done ANSWER               (the goal is reached; ANSWER is the result for the user)
@@ -389,7 +391,7 @@ def _pointer_path(act: dict, home: list[tuple[float, float]] | None = None) -> l
         case "swipe": return [f(act["x1"], act["y1"]), f(act["x2"], act["y2"])]
         case "path": return [f(*p) for p in act["points"]]
         case "circle": return [f(act["x"] + act["r"], act["y"])]
-        case "home": return list(home or HOME_SWIPE)
+        case "home": return list(HOME_SWIPE if home is None else home)
         case "back": return [(0.005, 0.45), (0.6, 0.45)]
         case _: return []
 

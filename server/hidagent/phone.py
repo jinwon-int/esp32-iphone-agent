@@ -36,6 +36,7 @@ POINTER_MODES = ("relative", "absolute")
 ABS_MAX = 32767         # the absolute pointer's logical range on each axis (board: ABS_MAX)
 ABS_STEP = 0.03         # screen fraction per absolute report while dragging, so iOS sees a moving finger, not a jump
 ABS_STEP_S = 0.008      # seconds between those reports (the relative mouse's pace, STEP_MS on the board)
+ABS_TAP_SETTLE = 0.03   # seconds the absolute pointer rests on the target before pressing, so iOS sees it arrive
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
 MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
 
@@ -55,22 +56,27 @@ class HomeVia:
     """How the agent gets to the Home Screen.
 
     By default it flicks up from the bottom edge. Some iOS versions ignore that flick from a pointer (iOS 27 did,
-    and the keyboard's cmd+h too; see #17), so the AssistiveTouch button can be used instead:
-    ``button`` alone taps the button (AssistiveTouch "Single-Tap" set to Home); with ``menu_home`` the button
-    opens the menu and that point is its Home item. Both are screen fractions, as seen in the live view.
+    and the keyboard's cmd+h too; see #17), so there are two other ways:
+    ``key``: the board's consumer Home key (usage 0x0040, Apple's "Home Button"; needs the firmware's
+    ``consumer`` command). AssistiveTouch: ``button`` alone taps the button ("Single-Tap" set to Home); with
+    ``menu_home`` the button opens the menu and that point is its Home item. Both are screen fractions, as seen in
+    the live view.
     """
     button: tuple[float, float] | None = None
     menu_home: tuple[float, float] | None = None
+    key: bool = False
 
     @classmethod
     def from_env(cls, env=os.environ) -> "HomeVia":
-        """``HOME_METHOD`` = ``swipe`` (default) or ``assistivetouch`` (needs ``ASSISTIVETOUCH_BUTTON``, and
-        ``ASSISTIVETOUCH_MENU_HOME`` unless Single-Tap is set to Home)."""
+        """``HOME_METHOD`` = ``swipe`` (default), ``key`` (the board's consumer Home key) or ``assistivetouch``
+        (needs ``ASSISTIVETOUCH_BUTTON``, and ``ASSISTIVETOUCH_MENU_HOME`` unless Single-Tap is set to Home)."""
         method = env.get("HOME_METHOD", "").strip().lower() or "swipe"
         if method == "swipe":
             return cls()
+        if method == "key":
+            return cls(key=True)
         if method != "assistivetouch":
-            raise ValueError(f"HOME_METHOD must be 'swipe' or 'assistivetouch', not {method!r}")
+            raise ValueError(f"HOME_METHOD must be 'swipe', 'key' or 'assistivetouch', not {method!r}")
         button = env.get("ASSISTIVETOUCH_BUTTON", "").strip()
         if not button:
             raise ValueError("HOME_METHOD=assistivetouch needs ASSISTIVETOUCH_BUTTON=x,y (where the button sits)")
@@ -81,6 +87,8 @@ class HomeVia:
     @property
     def path(self) -> list[tuple[float, float]]:
         """Screen points the pointer visits on the way home (for drawing the step)."""
+        if self.key:
+            return []
         if self.button is None:
             return list(HOME_SWIPE)
         return [self.button] + ([self.menu_home] if self.menu_home else [])
@@ -248,6 +256,8 @@ class Phone:
     async def tap(self, x: float, y: float, aim: bool = False) -> None:
         """aim=True finds the pointer on screen first (slower); worth it when a tap just missed."""
         await self.point(x, y, aim)
+        if self.absolute:
+            await asyncio.sleep(ABS_TAP_SETTLE)
         await self.device.send("click")
         await asyncio.sleep(TAP_GAP)
 
@@ -292,6 +302,9 @@ class Phone:
         await self.device.send(f"key {combo}")
 
     async def go_home(self) -> None:
+        if self.home.key:
+            await self.device.send("consumer home")
+            return
         if self.home.button is None:
             await self.swipe(*HOME_SWIPE[0], *HOME_SWIPE[1], hold=False)  # resting there would open the app switcher
             return

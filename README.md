@@ -100,7 +100,9 @@ ESP32-S3 Super Minis, run `FLASH_SIZE=4M hardware/flash.sh` (the firmware needs 
 **Experimental:** `ABSOLUTE_POINTER=1 hardware/flash.sh` builds the board as an absolute pointer (like a tablet)
 instead of a relative mouse; set `POINTER_MODE=absolute` on the server to match. The server then sends screen
 positions and needs no calibration or pointer search. Whether iOS maps it to the whole screen is still being
-measured on a real phone (#14); the relative mouse stays the default.
+measured on a real phone (#14); the relative mouse stays the default. iOS 18 or newer is needed for an absolute
+pointer, and the phone should stay in portrait (turn on Portrait Orientation Lock): after a rotation the mapping
+can be off.
 
 ### 2. Install and start the server
 
@@ -128,12 +130,17 @@ token) once in your browser; it remembers the token for 30 days. UxPlay 1.68 or 
 4. In the web page, open **Manual controls → Calibrate**. The server moves the pointer, finds it on the live screen
    and calibrates itself in a few seconds; if it cannot see the pointer, it asks you to click exactly on it.
 5. If **Home** in the web page does not reach the Home Screen (iOS 27 ignores the bottom flick from a pointer, and
-   `cmd+h` too), go home through AssistiveTouch: set `HOME_METHOD=assistivetouch` and
-   `ASSISTIVETOUCH_BUTTON` to where the button sits, plus either
+   `cmd+h` too), first try `HOME_METHOD=key`: the board sends the consumer-page Home key (usage 0x0040, which
+   Apple's Accessory Design Guidelines map to the Home Button). If that does not work on your phone, go home
+   through AssistiveTouch: set `HOME_METHOD=assistivetouch` and `ASSISTIVETOUCH_BUTTON` to where the button sits,
+   plus either
    - `ASSISTIVETOUCH_MENU_HOME`, the menu's Home item (tap the button once in the web page to see where it is), or
    - **AssistiveTouch → Custom Actions → Single-Tap → Home** on the phone, and no menu item.
    Calibrate on a bright screen (the Home Screen): the pointer is hard to find on a dark one. Keep the button where
    it is afterwards; if it moves, update the setting.
+6. Recommended in **AssistiveTouch**: *Idle Opacity* 100 % (the translucent button is hard to hit and to see), and
+   under **Pointer Style** a larger pointer in a strong colour with *Automatically Hide* off (easier to find on dark
+   screens).
 
 ### 4. Give it a task
 
@@ -177,7 +184,7 @@ Set in `server/.env` (see [`.env.example`](server/.env.example)):
 | `HIDAGENT_DATA` | `~/.hidagent` | Calibration, secrets and debug traces |
 | `GATE_MODE` | `off` | `observe`: ask Jev about each action and record the answer, see "Action gate" |
 | `POINTER_MODE` | `relative` | `absolute` for a board built with `ABSOLUTE_POINTER=1` (experimental, see "Flash the board"); must match the board |
-| `HOME_METHOD` | `swipe` | How to reach the Home Screen: `swipe` (flick up from the bottom edge) or `assistivetouch` (tap the AssistiveTouch button, see "Set up the phone") — for iOS versions that ignore the flick from a pointer |
+| `HOME_METHOD` | `swipe` | How to reach the Home Screen: `swipe` (flick up from the bottom edge), `key` (the board's consumer Home key) or `assistivetouch` (tap the AssistiveTouch button), see "Set up the phone" — for iOS versions that ignore the flick from a pointer |
 | `ASSISTIVETOUCH_BUTTON` / `ASSISTIVETOUCH_MENU_HOME` | — | `assistivetouch` only: where the button and the menu's Home item are, as `x,y` screen fractions (e.g. `0.9,0.27`). Leave the menu item out when the button's Single-Tap action is set to Home |
 | `OCR_MODE` | `api` if installed | `off` · `api` (`GET /api/screen_text`) · `actor` (also added to the actor's prompt). Needs `pip install -e '.[ocr]'`, see "Screen text (OCR)" |
 | `HIDAGENT_DEBUG` | `0` | Debug mode, see below |
@@ -300,7 +307,8 @@ running it; the server drops the link on a wrong reply tag. Long text is typed i
 | `press` / `release` / `click` | Left button down / up / both |
 | `scroll <v> <h>` | Scroll wheel |
 | `type <text>` | Type ASCII text |
-| `key <combo>` | Press keys, e.g. `enter`, `cmd+h`, `cmd+space` |
+| `key <combo>` | Press keys, e.g. `enter`, `cmd+space`, `ctrl+space` (next keyboard language); `globe` is held like a modifier, e.g. `globe+h` |
+| `consumer <key>` | A consumer-page key: `home` (0x0040, Home Button), `search` (0x0221, Spotlight), `globe` (0x029D, Globe key), `keyboard` (0x01AE, show/hide the on-screen keyboard), or a raw usage `0x0001`-`0x03ff` |
 
 If the Wi-Fi link drops, the board releases all buttons and reconnects on its own. While the phone is locked, its USB
 port sleeps: the board then tries to wake it and otherwise answers `err phone usb asleep` instead of waiting. A watchdog
