@@ -190,3 +190,38 @@ def test_screen_text_needs_a_live_screen_and_filters_by_confidence(web, monkeypa
     assert client.get("/api/screen_text?min_conf=0.9").json()["items"] == rows[:1]
     assert ocr.frames and ocr.frames[0] == LiveScreen.frame
     assert client.get("/api/status").json()["ocr"] == "api"
+
+
+def test_longpress_and_drag_endpoints(web, monkeypatch):
+    from hidagent.phone import DROP, LONG_PRESS, PICK_UP
+
+    module, client = web
+    calls = []
+
+    class FakeScreen:
+        live, aspect, frame = True, 90 / 195, None
+
+        async def settled(self, **_):
+            return 0.3, True
+
+    class FakePhone:
+        async def long_press(self, x, y, seconds=1.0, aim=False):
+            calls.append(("long_press", x, y, seconds))
+
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False):
+            calls.append(("drag", points, pick, rest, aim))
+
+    monkeypatch.setattr(module, "screen", FakeScreen())
+    monkeypatch.setattr(module, "phone", FakePhone())
+
+    r = client.post("/api/longpress", json={"x": 0.5, "y": 0.3})
+    assert r.status_code == 200 and set(r.json()) == {"ok", "settle", "screen_changed"}
+    r = client.post("/api/drag", json={"x1": 0.15, "y1": 0.35, "x2": 0.4, "y2": 0.35})
+    assert r.status_code == 200
+    assert calls == [("long_press", 0.5, 0.3, LONG_PRESS), ("drag", [(0.15, 0.35), (0.4, 0.35)], PICK_UP, DROP, True)]
+
+    # the hold times can be tuned per call, within limits (a button held for minutes would be a stuck finger)
+    client.post("/api/longpress", json={"x": 0.5, "y": 0.3, "seconds": 2.0})
+    assert calls[-1] == ("long_press", 0.5, 0.3, 2.0)
+    assert client.post("/api/longpress", json={"x": 0.5, "y": 0.3, "seconds": 30}).status_code == 422
+    assert client.post("/api/drag", json={"x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2, "rest": 9}).status_code == 422

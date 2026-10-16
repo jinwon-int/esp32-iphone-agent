@@ -29,7 +29,7 @@ DOMAIN = "iphone_agent.action_gate"
 PROMPT_VERSION = "iphone-gate-v1"
 MIN_CONFIDENCE = 0.5  # fleet default for gates (nunchi #1851); used only for the "would" column for now
 OFF_GOAL_BELOW = 0.3  # on_goal probability under which the action would be held for confirmation
-CHECKED = ("tap", "swipe", "path", "circle", "type", "key", "home", "back")  # not wait/replan/done/fail
+CHECKED = ("tap", "longpress", "swipe", "drag", "path", "circle", "type", "key", "home", "back")  # not wait/replan/…
 
 RISK_INSTRUCTIONS = (
     "An AI agent is operating a person's iPhone to reach the person's GOAL. It is about to perform ACTION; THOUGHT "
@@ -64,7 +64,9 @@ def describe(action: dict) -> str:
         return f"press the keys {action.get('combo', '')}"
     if a == "tap":
         return "tap the element described in THOUGHT"
-    if a in ("swipe", "path", "circle"):
+    if a == "longpress":
+        return "long press on the element described in THOUGHT"
+    if a in ("swipe", "drag", "path", "circle"):
         return f"{a} gesture on the screen"
     return f"{a} (system navigation)"
 

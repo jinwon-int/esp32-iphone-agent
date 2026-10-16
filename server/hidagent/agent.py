@@ -14,7 +14,7 @@ from .device import DeviceError
 from .gate import Gate
 from .gate import describe as gate_describe
 from .llm import LLM, image_size, shrink
-from .phone import HOME_SWIPE, Phone
+from .phone import DROP, HOME_SWIPE, PICK_UP, Phone
 from .screen import Screen
 
 log = logging.getLogger(__name__)
@@ -60,10 +60,17 @@ If you are unsure what an element does, tap it alone (one DO line) and check the
 Stop before anything that cannot be undone: never tap a final Pay, Buy, Place order, Send, Delete,
 Confirm or Sign out button, and never change account, password or security settings. Do everything
 up to that point, then reply "confirm" with what is ready; the user does the last tap.
+In Home Screen edit mode (icons wiggle) never tap the small minus badge on an icon: it leads to Remove App and
+Delete App. To leave edit mode, tap Done.
 Actions:
   tap X Y [precise]         (precise: the pointer is located and corrected before tapping, about 1 s slower;
                              use it for small or tightly packed targets: list rows, checkmarks, toggles, small icons)
   swipe X1 Y1 X2 Y2         (finger moves from X1,Y1 to X2,Y2: "swipe down" means Y2 > Y1)
+  longpress X Y [precise]   (touch and hold about 1 s: opens an item's menu; on the Home Screen, holding an app or
+                             an empty spot until the icons wiggle enters edit mode)
+  drag X1 Y1 X2 Y2          (pick up the item at X1,Y1, carry it to X2,Y2 and drop it there: moves a Home Screen
+                             icon in edit mode (dropping it onto another app makes a folder) or a list row by its
+                             handle; to scroll, use swipe, not drag)
   path X1 Y1 X2 Y2 X3 Y3 …  (one continuous stroke through 2-20 points, for drawing)
   circle X Y R              (draw a circle centered at X Y; R is the radius in x units)
   type TEXT                 (English or Korean, not both in one action; tap the input field first. Look at the
@@ -91,6 +98,7 @@ META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "chan
 
 # action name -> argument names; numeric arguments are 0-1000 screen coordinates
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
+           "longpress": ("x", "y"), "drag": ("x1", "y1", "x2", "y2"),
            "type": ("text",), "key": ("combo",), "done": ("answer",), "fail": ("reason",), "confirm": ("reason",),
            "home": (), "back": (), "wait": (), "replan": ()}
 TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the last step to the user
@@ -120,7 +128,7 @@ def parse_command(line: str) -> dict:
     if len(numbers) != len(keys):
         raise ValueError(f"{name} needs {len(keys)} numbers: {line[:100]}")
     action = {"action": name, **dict(zip(keys, numbers, strict=True))}
-    if name == "tap" and "precise" in rest.lower():
+    if name in ("tap", "longpress") and "precise" in rest.lower():
         action["precise"] = True
     return action
 
@@ -405,6 +413,9 @@ class Agent:
         match a["action"]:
             case "tap": await self.phone.tap(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
             case "swipe": await self.phone.swipe(p("x1"), p("y1"), p("x2"), p("y2"))
+            case "longpress": await self.phone.long_press(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
+            case "drag":  # lift the item, carry it, rest on the target; aim first: picking the wrong icon costs more
+                await self.phone.drag([(p("x1"), p("y1")), (p("x2"), p("y2"))], pick=PICK_UP, rest=DROP, aim=True)
             case "path": await self.phone.drag([(x / 1000, y / 1000) for x, y in a["points"]])
             case "circle": await self.phone.drag(circle(p("x"), p("y"), p("r"), self.screen.aspect))
             case "type": await self.phone.type(a["text"])
@@ -419,8 +430,8 @@ def _pointer_path(act: dict, home: list[tuple[float, float]] | None = None) -> l
     """Screen points (fractions) the pointer passes through for one action; home: the phone's way home."""
     f = lambda x, y: (x / 1000, y / 1000)  # noqa: E731
     match act["action"]:
-        case "tap": return [f(act["x"], act["y"])]
-        case "swipe": return [f(act["x1"], act["y1"]), f(act["x2"], act["y2"])]
+        case "tap" | "longpress": return [f(act["x"], act["y"])]
+        case "swipe" | "drag": return [f(act["x1"], act["y1"]), f(act["x2"], act["y2"])]
         case "path": return [f(*p) for p in act["points"]]
         case "circle": return [f(act["x"] + act["r"], act["y"])]
         case "home": return list(HOME_SWIPE if home is None else home)

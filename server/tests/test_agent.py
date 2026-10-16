@@ -522,3 +522,60 @@ def test_actor_prompt_says_coordinates_are_not_pixels():
     from hidagent.agent import ACTOR_PROMPT
 
     assert "NOT pixels" in ACTOR_PROMPT
+
+
+def test_parse_longpress_and_drag():
+    assert parse_command("longpress 500 300") == {"action": "longpress", "x": 500, "y": 300}
+    assert parse_command("longpress 500 300 precise")["precise"] is True
+    assert parse_command("drag 150 350 400 350") == {"action": "drag", "x1": 150, "y1": 350, "x2": 400, "y2": 350}
+    with pytest.raises(ValueError):
+        parse_command("drag 150 350 400")  # needs both points
+
+
+def test_longpress_and_drag_reach_the_phone():
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+    from hidagent.phone import DROP, PICK_UP
+
+    calls = []
+
+    class Phone:
+        async def long_press(self, x, y, aim=False):
+            calls.append(("long_press", x, y, aim))
+
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False):
+            calls.append(("drag", points, pick, rest, aim))
+
+    agent = Agent(phone=Phone(), screen=None, actor=None, planner=None, trace=Trace(None))
+    asyncio.run(agent._do({"action": "longpress", "x": 500, "y": 300}))
+    asyncio.run(agent._do({"action": "drag", "x1": 150, "y1": 350, "x2": 400, "y2": 350}))
+    assert calls[0] == ("long_press", 0.5, 0.3, False)
+    # an item is lifted, carried and rested on its target; the pick-up point is aimed, the wrong icon costs more
+    assert calls[1] == ("drag", [(0.15, 0.35), (0.4, 0.35)], PICK_UP, DROP, True)
+
+
+def test_longpress_and_drag_pointer_paths():
+    from hidagent.agent import _pointer_path
+
+    assert _pointer_path({"action": "longpress", "x": 500, "y": 300}) == [(0.5, 0.3)]
+    assert _pointer_path({"action": "drag", "x1": 150, "y1": 350, "x2": 400, "y2": 350}) == [(0.15, 0.35),
+                                                                                              (0.4, 0.35)]
+
+
+def test_every_screen_action_is_checked_by_the_gate_and_taught_to_the_actor():
+    from hidagent.agent import ACTIONS, ACTOR_PROMPT
+    from hidagent.gate import CHECKED, describe
+
+    assert {"longpress", "drag"} <= set(CHECKED)
+    assert "longpress X Y" in ACTOR_PROMPT and "drag X1 Y1 X2 Y2" in ACTOR_PROMPT
+    assert {"longpress", "drag"} <= set(ACTIONS)
+    assert "gesture" in describe({"action": "drag"}) and "long press" in describe({"action": "longpress"})
+
+
+def test_actor_is_told_never_to_touch_the_delete_badge_in_edit_mode():
+    from hidagent.agent import ACTOR_PROMPT
+
+    text = " ".join(ACTOR_PROMPT.split()).lower()
+    assert "minus" in text and "remove app" in text
