@@ -25,6 +25,10 @@
 // is useless to an attacker: session = HMAC(key, "session:<board nonce>:<server nonce>"),
 //   server -> <command> <HMAC(session, "cmd:<n>:<command>")[:32]>
 //   board  -> <reply> <HMAC(session, "reply:<n>:<reply>")[:32]>
+//
+// Away from home (#6, optional, see secrets.example.h): WIFI_SSID2 adds a second network (e.g. the phone's hotspot),
+// and WG_* settings send the link through a WireGuard tunnel, so the board reaches the server from any Wi-Fi and the
+// link is encrypted on the way. Without them the board connects to SERVER_HOST directly, as before.
 
 #include <WiFi.h>
 #include <esp_random.h>
@@ -35,7 +39,25 @@
 #include "USBHIDKeyboard.h"
 #include "USBHIDConsumerControl.h"
 #include "tusb.h"
-#include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVER_HOST, SERVER_PORT, DEVICE_KEY
+#include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVER_HOST, SERVER_PORT, DEVICE_KEY (+ optional WIFI_SSID2, WG_*)
+
+#ifdef WG_PRIVATE_KEY
+#define USE_WIREGUARD 1
+#include <time.h>
+#include "lwip/tcpip.h"
+#include "src/esp_wireguard/esp_wireguard.h"  // droscy/esp_wireguard, vendored (see its VENDORED.md)
+#ifndef WG_ENDPOINT_PORT
+#define WG_ENDPOINT_PORT 51820
+#endif
+#ifndef WG_NETMASK
+#define WG_NETMASK "255.255.255.0"
+#endif
+#if !defined(WG_PEER_PUBLIC_KEY) || !defined(WG_ENDPOINT) || !defined(WG_ADDRESS)
+#error "WG_PRIVATE_KEY needs WG_PEER_PUBLIC_KEY, WG_ENDPOINT and WG_ADDRESS too (see secrets.example.h)"
+#endif
+#else
+#define USE_WIREGUARD 0
+#endif
 
 #ifndef DEVICE_KEY
 #error "secrets.h must define DEVICE_KEY (the same value as DEVICE_KEY in server/.env)"
@@ -72,6 +94,10 @@ USBHIDConsumerControl consumer;
 // CONSUMER_CONTROL_HOME (0x0223, AC Home): Apple's Home Button is 0x0040 (Menu).
 const uint16_t CONSUMER_HOME = 0x0040, CONSUMER_SEARCH = 0x0221, CONSUMER_GLOBE = 0x029D, CONSUMER_KEYBOARD = 0x01AE;
 WiFiClient server;
+const unsigned long WIFI_SWITCH_MS = 15000;  // with WIFI_SSID2: try the other network after this long without Wi-Fi
+int wifiNet = 0;                             // 0 = WIFI_SSID, 1 = WIFI_SSID2
+unsigned long wifiDownSince = 0;             // when Wi-Fi was last seen down (or the current network was chosen)
+bool wifiWasUp = false;
 String session;      // per-connection key from the handshake; empty while not authenticated
 uint32_t seq = 0;    // number of the next command in this session
 const unsigned MAX_LINE = 512;
@@ -299,6 +325,71 @@ void hangUp() {  // drop the link and anything held down; the loop reconnects
   server.stop();
 }
 
+void wifiBegin(int net) {
+  wifiNet = net;
+  wifiDownSince = millis();
+#ifdef WIFI_SSID2
+  if (net == 1) { WiFi.begin(WIFI_SSID2, WIFI_PASS2); return; }
+#endif
+  wifiBegin(0);
+}
+
+// True while Wi-Fi is up. Never blocks: WiFi.begin() returns at once and the driver keeps retrying; with a second
+// network, switch after WIFI_SWITCH_MS without a connection (e.g. home Wi-Fi out of reach, the hotspot is on).
+bool wifiUp() {
+  if (WiFi.status() == WL_CONNECTED) { wifiWasUp = true; return true; }
+  if (wifiWasUp) { wifiWasUp = false; wifiDownSince = millis(); }
+#ifdef WIFI_SSID2
+  if (millis() - wifiDownSince > WIFI_SWITCH_MS) {
+    WiFi.disconnect();
+    wifiBegin(1 - wifiNet);
+  }
+#endif
+  return false;
+}
+
+#if USE_WIREGUARD
+wireguard_config_t wgConfig = ESP_WIREGUARD_CONFIG_DEFAULT();
+wireguard_ctx_t wgCtx = ESP_WIREGUARD_CONTEXT_DEFAULT();
+bool wgInited = false, wgConnected = false, clockAsked = false;
+
+// The library calls lwIP's raw API (netif_add, dns_gethostbyname, udp_*). arduino-esp32 3.x builds lwIP with
+// TCPIP core locking and thread-safety checks, so every call from this task must hold the core lock, or lwIP
+// asserts and the board resets (a compile-only check cannot see this).
+esp_err_t wgCall(esp_err_t (*fn)(wireguard_ctx_t *), wireguard_ctx_t *ctx) {
+  LOCK_TCPIP_CORE();
+  esp_err_t err = fn(ctx);
+  UNLOCK_TCPIP_CORE();
+  return err;
+}
+esp_err_t wgInit(wireguard_ctx_t *ctx) { return esp_wireguard_init(&wgConfig, ctx); }
+esp_err_t wgPeerUp(wireguard_ctx_t *ctx) { return esp_wireguard_peer_is_up(ctx); }
+
+// True once the tunnel to the hub is up. Each step returns at once and is retried on the next loop: the clock first
+// (a WireGuard handshake carries a timestamp, so it needs NTP), then the interface, then the peer (the hub's host
+// name, if any, resolves in the background).
+bool tunnelUp() {
+  if (!clockAsked) { configTime(0, 0, "pool.ntp.org", "time.google.com"); clockAsked = true; }
+  if (time(nullptr) < 1700000000) return false;  // not synced yet
+  if (!wgInited) {
+    wgConfig.private_key = WG_PRIVATE_KEY;
+    wgConfig.public_key = WG_PEER_PUBLIC_KEY;
+    wgConfig.address = WG_ADDRESS;
+    wgConfig.netmask = WG_NETMASK;
+    wgConfig.endpoint = WG_ENDPOINT;
+    wgConfig.port = WG_ENDPOINT_PORT;
+    wgConfig.persistent_keepalive = 25;  // keeps the hotspot's NAT mapping open
+    if (wgCall(wgInit, &wgCtx) != ESP_OK) return false;
+    wgInited = true;
+  }
+  if (!wgConnected) {
+    if (wgCall(esp_wireguard_connect, &wgCtx) != ESP_OK) return false;  // ESP_ERR_RETRY while DNS is pending
+    wgConnected = true;
+  }
+  return wgCall(wgPeerUp, &wgCtx) == ESP_OK;
+}
+#endif
+
 void setup() {
 #if DEBUG_SERIAL
   Serial.begin(115200);
@@ -319,12 +410,15 @@ void setup() {
 
 void loop() {
   esp_task_wdt_reset();
-  if (WiFi.status() != WL_CONNECTED) { mouse.release(MOUSE_LEFT); delay(50); return; }  // auto-reconnects
+  if (!wifiUp()) { mouse.release(MOUSE_LEFT); delay(50); return; }  // auto-reconnects (or switches network)
   if (!server.connected()) {
     mouse.release(MOUSE_LEFT);  // a gesture cut off mid-way must not leave the button held (long press)
     keyboard.releaseAll();
     consumer.release();
     session = "";
+#if USE_WIREGUARD
+    if (!tunnelUp()) { delay(100); return; }  // SERVER_HOST is inside the tunnel
+#endif
     if (!server.connect(SERVER_HOST, SERVER_PORT, 1000)) { delay(200); return; }  // retry fast: show up at once
     server.setNoDelay(true);
     if (!handshake()) {  // the hello also tells the server why the board last restarted, and its uptime
@@ -336,8 +430,9 @@ void loop() {
       return;
     }
 #if DEBUG_SERIAL
-    Serial.printf("connected to %s:%d as %s after %lu ms\n", SERVER_HOST, SERVER_PORT,
-                  WiFi.localIP().toString().c_str(), millis());
+    Serial.printf("connected to %s:%d as %s on %s%s after %lu ms\n", SERVER_HOST, SERVER_PORT,
+                  WiFi.localIP().toString().c_str(), WiFi.SSID().c_str(), USE_WIREGUARD ? " via WireGuard" : "",
+                  millis());
 #endif
   }
   if (server.available()) {

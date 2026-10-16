@@ -46,3 +46,18 @@ jobs:
                 --build-property "compiler.cpp.extra_flags=-DABSOLUTE_POINTER=$abs" hid_bridge
             done
           done
+      - name: Build with the away-from-home options (second Wi-Fi + WireGuard tunnel, #6; dummy keys)
+        working-directory: hardware
+        run: |
+          cp hid_bridge/secrets.example.h hid_bridge/secrets.h
+          key() { head -c 32 /dev/urandom | base64; }
+          cat >> hid_bridge/secrets.h <<EOF
+          #define WIFI_SSID2 "hotspot"
+          #define WIFI_PASS2 "hotspot-password"
+          #define WG_PRIVATE_KEY "$(key)"
+          #define WG_PEER_PUBLIC_KEY "$(key)"
+          #define WG_ENDPOINT "203.0.113.5"
+          #define WG_ADDRESS "10.9.0.2"
+          EOF
+          arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=4M" \
+            --build-property "compiler.cpp.extra_flags=-DABSOLUTE_POINTER=1" hid_bridge
