@@ -97,6 +97,9 @@ hardware/flash.sh            # optional arguments: [serial port] [--debug]
 The board's flash size defaults to 8 MB (XIAO ESP32S3). For a 4 MB board such as the ESP32-S3-Zero or most
 ESP32-S3 Super Minis, run `FLASH_SIZE=4M hardware/flash.sh` (the firmware needs about 1 MB).
 
+A wrong flash size, a serial-port permission error, or confirming a flash without the phone? See
+[docs/flashing-troubleshooting.md](docs/flashing-troubleshooting.md).
+
 **Experimental:** `ABSOLUTE_POINTER=1 hardware/flash.sh` builds the board as an absolute pointer (like a tablet)
 instead of a relative mouse; set `POINTER_MODE=absolute` on the server to match. The server then sends screen
 positions and needs no calibration or pointer search. Whether iOS maps it to the whole screen is still being
