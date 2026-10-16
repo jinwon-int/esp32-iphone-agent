@@ -22,3 +22,6 @@
 // #define WG_ENDPOINT_PORT 51820
 // #define WG_ADDRESS "10.9.0.2"            // the board's address inside the tunnel
 // #define WG_NETMASK "255.255.255.0"
+// When the server is on the first (home) Wi-Fi's network: connect there directly, without the tunnel (faster, and
+// no need for the router to loop its own public address back), and use the tunnel only on WIFI_SSID2:
+// #define SERVER_HOST_HOME "192.168.1.10"
