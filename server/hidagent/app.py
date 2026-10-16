@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import auth, bench, vision
 from .agent import Agent, settle_options
@@ -19,7 +19,7 @@ from .device import Device, DeviceError
 from .gate import Gate
 from .llm import LLM
 from .ocr import OCR
-from .phone import HomeVia, Phone
+from .phone import DROP, LONG_PRESS, PICK_UP, HomeVia, Phone
 from .screen import Screen
 from .screen_push import DEFAULT_PORT as PUSH_DEFAULT_PORT
 from .screen_push import PushScreen
@@ -165,6 +165,15 @@ class Scroll(Point):
     lines: int
 
 
+class LongPress(Point):
+    seconds: float = Field(LONG_PRESS, gt=0, le=5)  # bounded: a button held for minutes is a stuck finger
+
+
+class Drag(Swipe):
+    pick: float = Field(PICK_UP, ge=0, le=3)  # hold still after pressing, so iOS lifts the item
+    rest: float = Field(DROP, ge=0, le=3)     # stay on the target before letting go (icon on icon = folder)
+
+
 class Text(BaseModel):
     text: str
 
@@ -251,6 +260,18 @@ async def tap(p: Point):
 @app.post("/api/swipe")
 async def swipe(s: Swipe):
     return await act(phone.swipe(s.x1, s.y1, s.x2, s.y2), (s.x1, s.y1), (s.x2, s.y2))
+
+
+@app.post("/api/longpress")
+async def longpress(p: LongPress):
+    return await act(phone.long_press(p.x, p.y, seconds=p.seconds), (p.x, p.y))
+
+
+@app.post("/api/drag")
+async def drag(d: Drag):
+    """Pick up the item at 1, carry it to 2, drop it: Home Screen icons in edit mode, list rows by their handle."""
+    return await act(phone.drag([(d.x1, d.y1), (d.x2, d.y2)], pick=d.pick, rest=d.rest, aim=True),
+                     (d.x1, d.y1), (d.x2, d.y2))
 
 
 @app.post("/api/scroll")

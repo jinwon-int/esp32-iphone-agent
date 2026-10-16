@@ -52,8 +52,9 @@ uses the same paths a person uses — the screen and a pointer — so the phone 
   The board connects to the computer over Wi-Fi and executes simple line commands (`move`, `click`, `type`, …);
   all logic stays on the computer.
 - **Brain — a planner and an actor.** A planner model writes a short plan from the goal and the current screen.
-  An actor model then looks at each new screenshot and picks the next action: tap, swipe, draw a path, type, press
-  a key, go home, or finish. Both roles can be the same model.
+  An actor model then looks at each new screenshot and picks the next action: tap, touch and hold, swipe, move an
+  item (e.g. a Home Screen icon), draw a path, type, press a key, go home, or finish. Both roles can be the same
+  model.
 - **Closing the loop.** The pointer is relative, so the server tracks where it is. Before each tap it wiggles the
   pointer, finds it on the mirrored screen and corrects any miss, refining the calibration as it goes. After each
   action it checks whether the screen actually changed and tells the model, so a missed tap is noticed and retried
@@ -241,7 +242,8 @@ action, the rules that keep an agent out of trouble (no sleeping: actions wait f
 to hand a task to the built-in agent instead. `GET /openapi.json` has the full schema. Both need the UI
 token like every other call. Borrowed from [iCTRL](https://github.com/OpenMinis/iCTRL)'s `GET /skill`.
 
-Action calls (`/api/tap`, `/api/swipe`, `/api/scroll`, `/api/type`, `/api/key`, `/api/home`, `/api/back`) now wait
+Action calls (`/api/tap`, `/api/longpress`, `/api/swipe`, `/api/drag`, `/api/scroll`, `/api/type`, `/api/key`,
+`/api/home`, `/api/back`) now wait
 for the screen to settle and answer `{"ok": true, "settle": {"waited_s", "stable"}, "screen_changed": bool}`, so a
 caller knows whether the tap did anything without sleeping or diffing frames itself.
 

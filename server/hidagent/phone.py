@@ -30,6 +30,9 @@ CALIBRATION_STOPS = (150, 350)  # automatic calibration finds the pointer at the
 REHOME_EVERY = 10       # gestures between re-homing
 HOLD = 0.25             # seconds to rest before lifting, so iOS adds no momentum (the swipe stops where it ends)
 TAP_GAP = 0.15          # seconds to stay still after a click, so iOS sees a finished tap, not the start of a drag
+LONG_PRESS = 1.0        # seconds the button stays down for a long press (context menus, Home Screen edit mode)
+PICK_UP = 0.8           # seconds a drag holds still after pressing, so iOS lifts the item (an icon, a list row)
+DROP = 1.0              # seconds a lifted item rests on its target before it is let go (icon on icon = a folder)
 NUDGE = 12              # mouse units the pointer is wiggled by to find it on screen
 AIM_TOLERANCE = 0.008   # screen fraction; a bigger miss is corrected before pressing
 MAX_MISS = 0.06         # bigger misses are still corrected, but not learned from (they may be misreadings)
@@ -278,18 +281,41 @@ class Phone:
         await self.device.send("click")
         await asyncio.sleep(TAP_GAP)
 
+    async def long_press(self, x: float, y: float, seconds: float = LONG_PRESS, aim: bool = False) -> None:
+        """Press and keep the button down, then let go where it was pressed: a touch-and-hold.
+
+        Opens context menus; on the Home Screen, holding an app (or an empty spot) long enough enters edit mode.
+        The button is always released, even when the hold is interrupted.
+        """
+        await self.point(x, y, aim)
+        if self.absolute:
+            await asyncio.sleep(ABS_TAP_SETTLE)
+        await self.device.send("press")
+        try:
+            await asyncio.sleep(seconds)
+        finally:
+            await self.device.send("release")
+        await asyncio.sleep(TAP_GAP)
+
     async def swipe(self, x1: float, y1: float, x2: float, y2: float, hold: bool = True) -> None:
         await self.drag([(x1, y1), (x2, y2)], hold)
 
-    async def drag(self, points: list[tuple[float, float]], hold: bool = True) -> None:
+    async def drag(self, points: list[tuple[float, float]], hold: bool = True, pick: float = 0.0,
+                   rest: float | None = None, aim: bool = False) -> None:
         """Press at the first point, move through the rest, release: one continuous stroke.
 
         hold=True rests at the end first, so lists and pickers stop exactly there instead of flinging on.
         System gestures (home, back) need the flick, so they pass hold=False.
+        To move an item rather than the content under it (a Home Screen icon, a list row by its handle), pass
+        ``pick`` (seconds to hold still after pressing, so iOS lifts the item) and ``rest`` (seconds to stay on the
+        target before letting go; an icon resting on another makes a folder). aim=True locates the pointer on
+        the first point before pressing, so the right item is picked up.
         """
-        await self.point(*points[0])
+        await self.point(*points[0], aim=aim)
         await self.device.send("press")
         try:
+            if pick:
+                await asyncio.sleep(pick)
             last = points[0]
             for x, y in points[1:]:
                 if self.absolute:  # glide there in small steps: one jump would be a teleport, not a swipe
@@ -300,8 +326,9 @@ class Phone:
                     last = (x, y)
                     continue
                 await self._move_to(self._dx(x), self._dy(y), rehome=False)  # never home mid-drag
-            if hold:
-                await asyncio.sleep(HOLD)
+            pause = rest if rest is not None else (HOLD if hold else 0)
+            if pause:
+                await asyncio.sleep(pause)
         finally:
             await self.device.send("release")
 

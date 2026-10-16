@@ -4,7 +4,7 @@ import json
 import pytest
 
 from hidagent.agent import _pointer_path
-from hidagent.phone import ABS_MAX, HOME_SWIPE, HomeVia, Phone
+from hidagent.phone import ABS_MAX, HOLD, HOME_SWIPE, LONG_PRESS, HomeVia, Phone
 
 
 class FakeDevice:
@@ -111,3 +111,69 @@ def test_home_via_the_consumer_home_key(tmp_path):
     asyncio.run(phone.go_home())
     assert device.sent == ["consumer home"]  # no pointer moves at all
     assert _pointer_path({"action": "home"}, via.path) == []
+
+
+def record_sleeps(monkeypatch, device):
+    """Log every pause into the device's command list, so tests see when the button is held and for how long."""
+    async def sleep(seconds):
+        device.sent.append(f"sleep {seconds}")
+    monkeypatch.setattr("hidagent.phone.asyncio.sleep", sleep)
+
+
+def test_long_press_holds_the_button_down_on_the_target(tmp_path, monkeypatch):
+    phone, device = make_phone(tmp_path)
+    record_sleeps(monkeypatch, device)
+    asyncio.run(phone.long_press(0.5, 0.25, seconds=1.2))
+    assert device.sent[:2] == ["home", "move 250 250"]
+    assert device.sent[2:5] == ["press", "sleep 1.2", "release"]  # down, held, up: no click
+    assert "click" not in device.sent
+
+
+def test_long_press_defaults_to_about_a_second(tmp_path, monkeypatch):
+    phone, device = make_phone(tmp_path)
+    record_sleeps(monkeypatch, device)
+    asyncio.run(phone.long_press(0.5, 0.25))
+    held = device.sent[device.sent.index("press") + 1]
+    assert held == f"sleep {LONG_PRESS}" and 0.8 <= LONG_PRESS <= 1.5
+
+
+def test_long_press_lets_go_even_when_interrupted(tmp_path, monkeypatch):
+    phone, device = make_phone(tmp_path)
+
+    async def stop(seconds):  # e.g. the user presses Stop while the button is down
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("hidagent.phone.asyncio.sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(phone.long_press(0.5, 0.25))
+    assert device.sent[-1] == "release"  # never leave the button down
+
+
+def test_drag_can_pick_up_first_and_rest_on_the_target_before_dropping(tmp_path, monkeypatch):
+    """Moving a Home Screen icon: hold still until iOS lifts it, move, hover until the target reacts, let go."""
+    phone, device = make_phone(tmp_path)
+    record_sleeps(monkeypatch, device)
+    asyncio.run(phone.drag([(0.2, 0.2), (0.6, 0.4)], pick=0.8, rest=1.0))
+    i = device.sent.index("press")
+    assert device.sent[i:] == ["press", "sleep 0.8", "move 200 200", "sleep 1.0", "release"]
+
+
+def test_plain_drag_is_unchanged(tmp_path, monkeypatch):
+    phone, device = make_phone(tmp_path)
+    record_sleeps(monkeypatch, device)
+    asyncio.run(phone.drag([(0.2, 0.2), (0.6, 0.4)]))
+    i = device.sent.index("press")
+    assert device.sent[i:] == ["press", "move 200 200", f"sleep {HOLD}", "release"]  # no pause before moving
+    device.sent.clear()
+    asyncio.run(phone.drag([(0.2, 0.2), (0.6, 0.4)], hold=False))
+    assert device.sent[-2:] == ["move 200 200", "release"]  # a flick: no rest at the end either
+
+
+def test_absolute_long_press_lands_then_holds(tmp_path, monkeypatch):
+    phone, device = make_phone(tmp_path, pointer="absolute", calibrated=False)
+    record_sleeps(monkeypatch, device)
+    asyncio.run(phone.long_press(0.5, 0.25, seconds=1.0))
+    assert device.sent[0] == f"at {round(0.5 * ABS_MAX)} {round(0.25 * ABS_MAX)}"
+    i = device.sent.index("press")
+    assert device.sent[i:i + 3] == ["press", "sleep 1.0", "release"]
+    assert not any(c.startswith(("move", "home")) for c in device.sent)

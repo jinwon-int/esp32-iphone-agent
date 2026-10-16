@@ -61,6 +61,7 @@ const planText = (s) => (lang === "zh" && s.plan_zh) || s.plan || "";
 const times = (s) => [s.think_s != null && `${t("thinking")} ${fmt(s.think_s)}`, s.act_s != null && `${t("doing")} ${fmt(s.act_s)}`].filter(Boolean).join(" · ");
 const where = (s) => ({
   tap: () => ` (${s.x}, ${s.y})${s.precise ? " · precise" : ""}`, swipe: () => ` (${s.x1}, ${s.y1}) → (${s.x2}, ${s.y2})`,
+  longpress: () => ` (${s.x}, ${s.y})${s.precise ? " · precise" : ""}`, drag: () => ` (${s.x1}, ${s.y1}) → (${s.x2}, ${s.y2})`,
   path: () => ` · ${s.points.length} pts`, circle: () => ` (${s.x}, ${s.y}) r=${s.r}`,
 }[s.action] || (() => ""))();
 
@@ -77,12 +78,14 @@ function overlay(s) {
   const flow = (list) =>  // dashes that travel along the stroke, in its direction
     `<polyline class="flow" points="${pts(list)}" style="stroke:#000;fill:none" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linecap="round"/>`;
   switch (s.action) {
-    case "tap": {  // red, so the tap point stands out from the yellow swipe paths
+    case "tap":
+    case "longpress": {  // red, so the tap point stands out from the yellow swipe paths
       const ring = (cls, r, w, color) => `<ellipse class="${cls}" cx="${s.x}" cy="${s.y}" rx="${r}" ry="${r * aspect}" style="stroke:${color};fill:none" stroke-width="${w}" vector-effect="non-scaling-stroke"/>`;
       return svg(ring("ripple", 100, 7, "var(--tap)") + ring("", 100, 11, "#000") + ring("", 100, 6, "var(--tap)") +
         `<ellipse cx="${s.x}" cy="${s.y}" rx="22" ry="${22 * aspect}" style="fill:var(--tap);stroke:#fff" stroke-width="3" vector-effect="non-scaling-stroke"/>`);
     }
-    case "swipe": {
+    case "swipe":
+    case "drag": {
       const a = Math.atan2((s.y2 - s.y1) / aspect, s.x2 - s.x1), l = 45;
       const head = (d) => [s.x2 - l * Math.cos(a + d), s.y2 - l * aspect * Math.sin(a + d)];
       return svg(stroke(`<polyline points="${pts([[s.x1, s.y1], [s.x2, s.y2]])}"/>`) + flow([[s.x1, s.y1], [s.x2, s.y2]]) +
@@ -98,7 +101,7 @@ function overlay(s) {
 }
 // the 👆 sits on top of the svg as text, so it is not stretched
 function hand(s) {
-  if (s.action !== "tap") return "";
+  if (s.action !== "tap" && s.action !== "longpress") return "";
   return `<span class="hand" style="left:${s.x / 10}%;top:${s.y / 10}%">👆</span>`;
 }
 
