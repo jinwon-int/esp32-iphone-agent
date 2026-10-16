@@ -345,6 +345,22 @@ web UI work exactly as with AirPlay.
   still, re-send the last JPEG unchanged or a ping every second or two: the server treats a connection that has been
   silent for 5 s as gone. A new authenticated connection replaces the previous one.
 
+## Board away from home (WireGuard, optional)
+
+The board talks to the server over Wi-Fi, so by default it must be on the server's network. To use the phone and
+board elsewhere (the screen already crosses a VPN, see above), let the board join a second network and reach the
+server through a WireGuard tunnel. The board link is then also encrypted on the way.
+
+- In `secrets.h`, set `WIFI_SSID2`/`WIFI_PASS2` (e.g. the iPhone's Personal Hotspot with "Maximize Compatibility"
+  on: the board does 2.4 GHz WPA2/WPA3-Personal only, no captive portals) and the `WG_*` values from
+  `secrets.example.h`. `SERVER_HOST` becomes the server's address inside the tunnel. Flash again.
+- On a WireGuard hub with a public address, add the board as a peer (`allowed-ips <WG_ADDRESS>/32`), and let it
+  reach the server's tunnel address on the board port (7300) only. Allow that port on the server for the tunnel.
+- The board waits for the time (NTP; WireGuard needs it), brings the tunnel up, then connects as usual. Without the
+  first network for 15 s it tries the second, and back. Without `WG_*` it connects to `SERVER_HOST` directly.
+
+The tunnel key is stored in the board's flash like the Wi-Fi password: a lost board means removing its peer on the hub.
+
 ## Limitations
 
 - iOS does not mirror some screens (passcode entry, Apple Pay, DRM video); the agent cannot see them.
@@ -371,7 +387,8 @@ The agent can do anything you can do on an unlocked phone, so access to it is gu
   that proves the same, and every command and reply after that is tagged for that connection. A stranger connecting
   to the board port cannot drive the phone or kick the real board off, and someone who intercepts the board's
   connection (e.g. ARP spoofing) and relays the handshake still cannot inject or replay commands. The link is not
-  encrypted: someone on the network can read the commands, including typed text.
+  encrypted: someone on the network can read the commands, including typed text — unless it runs
+  through the optional WireGuard tunnel ("Board away from home").
 - **Push screen** — the listener binds to the VPN address you give it only (a wildcard is refused), the app proves a
   separate `PUSH_TOKEN` in the upgrade request (it lives on the phone, so it is not the UI token), a frame announcing
   more than 1 MB closes the connection unread, non-JPEG bytes and frames over 15/s are dropped, and strangers get the
