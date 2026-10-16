@@ -28,7 +28,8 @@
 //
 // Away from home (#6, optional, see secrets.example.h): WIFI_SSID2 adds a second network (e.g. the phone's hotspot),
 // and WG_* settings send the link through a WireGuard tunnel, so the board reaches the server from any Wi-Fi and the
-// link is encrypted on the way. Without them the board connects to SERVER_HOST directly, as before.
+// link is encrypted on the way. With SERVER_HOST_HOME too, the board skips the tunnel on the first (home) Wi-Fi and
+// connects to that address directly. Without WG_* the board connects to SERVER_HOST directly, as before.
 
 #include <WiFi.h>
 #include <esp_random.h>
@@ -416,10 +417,15 @@ void loop() {
     keyboard.releaseAll();
     consumer.release();
     session = "";
+    const char *host = SERVER_HOST;
 #if USE_WIREGUARD
+#ifdef SERVER_HOST_HOME
+    if (wifiNet == 0) host = SERVER_HOST_HOME;  // on the first (home) Wi-Fi: straight to the server, no tunnel
+    else
+#endif
     if (!tunnelUp()) { delay(100); return; }  // SERVER_HOST is inside the tunnel
 #endif
-    if (!server.connect(SERVER_HOST, SERVER_PORT, 1000)) { delay(200); return; }  // retry fast: show up at once
+    if (!server.connect(host, SERVER_PORT, 1000)) { delay(200); return; }  // retry fast: show up at once
     server.setNoDelay(true);
     if (!handshake()) {  // the hello also tells the server why the board last restarted, and its uptime
 #if DEBUG_SERIAL
@@ -430,9 +436,8 @@ void loop() {
       return;
     }
 #if DEBUG_SERIAL
-    Serial.printf("connected to %s:%d as %s on %s%s after %lu ms\n", SERVER_HOST, SERVER_PORT,
-                  WiFi.localIP().toString().c_str(), WiFi.SSID().c_str(), USE_WIREGUARD ? " via WireGuard" : "",
-                  millis());
+    Serial.printf("connected to %s:%d as %s on %s after %lu ms\n", host, SERVER_PORT,
+                  WiFi.localIP().toString().c_str(), WiFi.SSID().c_str(), millis());
 #endif
   }
   if (server.available()) {

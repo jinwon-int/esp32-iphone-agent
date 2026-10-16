@@ -358,6 +358,8 @@ server through a WireGuard tunnel. The board link is then also encrypted on the 
   reach the server's tunnel address on the board port (7300) only. Allow that port on the server for the tunnel.
 - The board waits for the time (NTP; WireGuard needs it), brings the tunnel up, then connects as usual. Without the
   first network for 15 s it tries the second, and back. Without `WG_*` it connects to `SERVER_HOST` directly.
+- If the server sits on the first (home) Wi-Fi's network, also set `SERVER_HOST_HOME` to its LAN address: at home the
+  board then connects directly (no detour, no router hairpin), and uses the tunnel only on the second network.
 
 The tunnel key is stored in the board's flash like the Wi-Fi password: a lost board means removing its peer on the hub.
 

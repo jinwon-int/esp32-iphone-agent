@@ -58,6 +58,7 @@ jobs:
           #define WG_PEER_PUBLIC_KEY "$(key)"
           #define WG_ENDPOINT "203.0.113.5"
           #define WG_ADDRESS "10.9.0.2"
+          #define SERVER_HOST_HOME "192.168.1.10"
           EOF
           arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=4M" \
             --build-property "compiler.cpp.extra_flags=-DABSOLUTE_POINTER=1" hid_bridge
