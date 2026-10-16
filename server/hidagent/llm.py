@@ -50,7 +50,9 @@ class LLM:
 def shrink(jpeg: bytes, longest: int) -> bytes:
     """Scale a JPEG down so its longest side is at most `longest` pixels (fewer image tokens, a faster reply).
 
-    Coordinates stay valid: the model answers in 0-1000 of whatever it was shown. Returns the input unchanged when
+    The actor is told the pixel size it was shown (see `image_size`), because models tend to answer in pixels of
+    the image they saw; shrinking without that made taps land in the wrong place on a device (#17). Returns the
+    input unchanged when
     `longest` is 0, the frame is already small enough, or it cannot be decoded (never cost a step over this).
     """
     if longest <= 0:
@@ -66,3 +68,14 @@ def shrink(jpeg: bytes, longest: int) -> bytes:
             return out.getvalue()
     except Exception:  # noqa: BLE001 - a frame Pillow cannot read still goes out as it was
         return jpeg
+
+
+def image_size(jpeg: bytes | None) -> tuple[int, int] | None:
+    """(width, height) of a JPEG in pixels, or None when it cannot be read."""
+    if not jpeg:
+        return None
+    try:
+        with Image.open(io.BytesIO(jpeg)) as im:
+            return im.size
+    except Exception:  # noqa: BLE001 - only a hint for the prompt; never cost a step over this
+        return None
