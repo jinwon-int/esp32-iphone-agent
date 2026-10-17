@@ -139,6 +139,10 @@ class OCR:
         return rows[:max_items]
 
     @staticmethod
-    def lines(items: list[dict], scale: int = 1000) -> str:
-        """One line per text for a prompt: ``"<text>" @ x y`` in 0-``scale`` coordinates (the actor's units)."""
-        return "\n".join(f'"{r["text"]}" @ {round(r["x"] * scale)} {round(r["y"] * scale)}' for r in items)
+    def lines(items: list[dict], scale: int | tuple[int, int] = 1000) -> str:
+        """One line per text for a prompt: ``"<text>" @ x y`` in the actor's units.
+
+        ``scale`` is one span for both axes (0-1000) or the screenshot's (width, height) for pixel positions.
+        """
+        sx, sy = scale if isinstance(scale, tuple) else (scale, scale)
+        return "\n".join(f'"{r["text"]}" @ {round(r["x"] * sx)} {round(r["y"] * sy)}' for r in items)

@@ -262,7 +262,7 @@ curl -s -H "$H" "$S/api/screen_text?min_conf=0.6"
 # {"items":[{"text":"Wi-Fi","x":0.17,"y":0.47,"w":0.15,"h":0.02,"conf":0.99}, …], "count":…, "took_s":0.7, …}
 ```
 
-`OCR_MODE=actor` also appends those lines (in the actor's 0-1000 coordinates) to every actor prompt, so it can aim
+`OCR_MODE=actor` also appends those lines (in pixels of the screenshot the actor sees, its unit) to every actor prompt, so it can aim
 at words instead of estimating — at the cost of about half a second and some tokens per step; `ocr_s` on each
 step records the cost. The gate never sees OCR output. Borrowed from iCTRL's `screen_text`.
 
