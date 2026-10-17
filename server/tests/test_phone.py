@@ -301,12 +301,14 @@ def test_carry_leaves_the_edge_as_soon_as_the_page_starts_to_turn(tmp_path, monk
     assert asyncio.run(phone.carry((0.85, 0.13), (0.5, 0.6), pages=1, pick=0.5, lift=0.6, rest=1.0)) == 1
     assert device.sent[-2:] == ["sleep 1.0", "release"]
     polls = device.sent.count("sleep 0.05")  # FLIP_POLL checks at the edge
-    assert 10 < polls < 25  # waited for the first turn's frames (index 40), left before the second (index 49)
+    assert 10 < polls < 30  # waited for the first turn (index 40) to settle, left before the second (index 49)
     edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"  # the empty band, beside no icon
     last_edge = max(i for i, c in enumerate(device.sent) if c == edge)
     after = [c for c in device.sent[last_edge + 1:] if c.startswith("at ")]
-    assert after == [f"at {round(0.5 * ABS_MAX)} {round(0.6 * ABS_MAX)}"]  # one jump off the edge, no glide (#35)
-    assert f"at {round(0.5 * ABS_MAX)} {round(0.6 * ABS_MAX)}" in device.sent  # then carried to the target
+    lx, ly = map(int, after[-1].split()[1:])
+    assert abs(lx - 0.5 * ABS_MAX) <= 2 and abs(ly - 0.6 * ABS_MAX) <= 2 and len(after) > 1  # glided off (#35)
+    assert any(abs(int(c.split()[1]) - 0.5 * ABS_MAX) <= 2 and abs(int(c.split()[2]) - 0.6 * ABS_MAX) <= 2
+               for c in device.sent if c.startswith("at "))  # then carried to the target
 
 
 def test_carry_turns_left_for_negative_pages(tmp_path, monkeypatch):
@@ -352,3 +354,22 @@ def test_a_folder_forming_is_not_a_page_turn(tmp_path, monkeypatch):
     phone, _ = carry_phone(tmp_path, monkeypatch, [_jpeg(30, start)] * 3 + [_jpeg(30)] * 37 + [local] * 400)
     with pytest.raises(RuntimeError, match="page did not turn"):
         asyncio.run(phone.carry(start, (0.5, 0.6), pages=1))
+
+
+def test_carry_waits_for_the_turn_to_settle_before_leaving_the_edge(tmp_path, monkeypatch):
+    # leaving mid-turn made iOS turn back to the first page (device 2026-10-17 23:21)
+    p1, p2 = _jpeg(30), _jpeg(200)
+    script = [_jpeg(30, (0.3, 0.3))] * 3 + [p1] * 37 + [_jpeg(90), _jpeg(140), _jpeg(180)] + [p2] * 60
+    phone, device = carry_phone(tmp_path, monkeypatch, script)
+    edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"
+    log = []
+    real_send = device.send
+
+    async def send(command):  # remember the frame index of every command
+        log.append((command, phone.screen.i))
+        await real_send(command)
+    device.send = send
+    asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1))
+    last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
+    left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
+    assert left_at >= 43  # left the edge only once the turn's frames (40-42) were over

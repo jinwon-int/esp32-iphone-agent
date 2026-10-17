@@ -54,6 +54,8 @@ CARRY_Y = 0.80          # ... at this height: below the last icon row's labels, 
                         # item never rests beside an icon (at 0.62 it sat next to column 4 and made a folder, #35)
 FLIP_CELLS = 0.5        # vision.cells_changed against the page before above this: the page is turning (a turn
                         # 0.54-0.88; a folder forming or an icon lifting/dropping 0.04-0.33; device frames 2026-10-17)
+FLIP_STILL = 6.0        # vision.page_change between two polls below this: the turn's animation is over
+FLIP_SETTLE_MAX = 1.0   # seconds to wait for that before leaving the edge anyway
 LIFT_GONE = 20.0        # vision.region_change at the start slot above this once at the edge: the item was lifted
 FLIP_POLL = 0.05        # seconds between screen checks while holding at the edge
 FLIP_SETTLE = 0.6       # seconds for the turn's animation before the item is carried on, off the edge
@@ -423,7 +425,8 @@ class Phone:
                 await self._glide(edge, start)
                 await asyncio.sleep(rest)
                 raise RuntimeError(f"page did not turn within {FLIP_TIMEOUT} s at the screen edge")
-            await self._jump(target)  # off the edge in one report: the next turn came 0.45 s after the first (#35)
+            await self._turn_settled()  # leaving mid-turn made iOS turn back (device 2026-10-17 23:21, #35)
+            await self._glide(edge, target)
             await asyncio.sleep(max(rest, FLIP_SETTLE))
         finally:
             await self.device.send("release")
@@ -435,6 +438,18 @@ class Phone:
             await self._at(*to)
         else:
             await self._move_to(self._dx(to[0]), self._dy(to[1]), rehome=False)
+
+    async def _turn_settled(self) -> None:
+        """Wait until the turn's animation is over (two polls alike), at most FLIP_SETTLE_MAX; the next turn follows
+        about 0.45 s later, so this returns as soon as the page holds still."""
+        waited, prev = 0.0, self.screen.frame
+        while waited < FLIP_SETTLE_MAX:
+            await asyncio.sleep(FLIP_POLL)
+            waited += FLIP_POLL
+            now = self.screen.frame
+            if vision.page_change(prev, now) < FLIP_STILL:
+                return
+            prev = now
 
     async def _turn_started(self, before: bytes | None) -> bool:
         """Wait at the edge until the screen content moves away from ``before`` (a page turn has begun)."""
