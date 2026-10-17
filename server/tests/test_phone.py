@@ -397,3 +397,40 @@ def test_carry_does_not_take_a_repeated_frame_for_a_settled_turn(tmp_path, monke
     last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
     left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
     assert left_at >= 46  # not while the turn's frame was merely repeated (indices 40-45)
+
+
+def _edge_log(phone, device):
+    log = []
+    real_send = device.send
+
+    async def send(command):  # remember the frame index of every command
+        log.append((command, phone.screen.i))
+        await real_send(command)
+    device.send = send
+    return log
+
+
+def test_carry_sees_a_turn_between_look_alike_pages(tmp_path, monkeypatch):
+    # pages of folders in the same slots: cells_changed stayed at 0.42 through the turn, the next turn (to a page
+    # that looks different) was the first one seen, and two pages turned (#54, device 2026-10-18)
+    a, b = _jpeg(30), _jpeg(33)  # look-alike pages: every cell under vision.cells_changed's level
+    script = ([_jpeg(30, (0.3, 0.3))] * 3 + [a] * 37 + [_jpeg(42), _jpeg(31)]  # one turn: slides on 2 new frames
+              + fresh(b, 9) + [_jpeg(200)] + [_jpeg(230)] * 40)  # index 51: the next turn, to another page
+    phone, device = carry_phone(tmp_path, monkeypatch, script)
+    log = _edge_log(phone, device)
+    assert asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1)) == 1
+    edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"
+    last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
+    left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
+    assert 42 <= left_at < 51  # after the first turn settled, before the second began
+
+
+def test_a_single_jolt_at_the_edge_is_not_a_page_turn(tmp_path, monkeypatch):
+    # on the last page iOS bounces at the edge: one frame slid 14.8, the way back 5.0 and less (device 2026-10-18)
+    start = (0.3, 0.3)
+    jolts = []
+    for _ in range(30):
+        jolts += [_jpeg(44), _jpeg(40), _jpeg(36), _jpeg(33)] + fresh(_jpeg(30), 2)
+    phone, _ = carry_phone(tmp_path, monkeypatch, [_jpeg(30, start)] * 3 + [_jpeg(30)] * 37 + jolts)
+    with pytest.raises(RuntimeError, match="page did not turn"):
+        asyncio.run(phone.carry(start, (0.5, 0.6), pages=1))
