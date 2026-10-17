@@ -62,6 +62,11 @@ Confirm or Sign out button, and never change account, password or security setti
 up to that point, then reply "confirm" with what is ready; the user does the last tap.
 In Home Screen edit mode (icons wiggle) never tap the small minus badge on an icon: it leads to Remove App and
 Delete App. To leave edit mode, tap Done.
+In an item's menu (after a long press) choose only the entry the goal needs; never Remove App, Delete App or
+Remove from Home Screen.
+To rename a Home Screen folder: long press the folder and choose Rename, or in edit mode tap the folder to open it
+and tap its name at the top. When the name shows a text cursor, clear it (key cmd+a, then key backspace), type the
+new name, then key enter. Check the new name in the open folder's title: the label under the icon may be shortened.
 Actions:
   tap X Y [precise]         (precise: the pointer is located and corrected before tapping, about 1 s slower;
                              use it for small or tightly packed targets: list rows, checkmarks, toggles, small icons)

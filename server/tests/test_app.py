@@ -140,6 +140,14 @@ def test_skill_file_ships_with_the_package():
     assert asyncio.iscoroutinefunction(__import__("hidagent.app", fromlist=["act"]).act)
 
 
+def test_skill_file_explains_folder_rename_and_korean_typing():
+    import importlib.resources as resources
+
+    text = " ".join(resources.files("hidagent").joinpath("skill.md").read_text(encoding="utf-8").split())
+    assert "Renaming a Home Screen folder" in text and "Remove from Home Screen" in text
+    assert "ASCII only" not in text and "or Korean" in text  # Korean typing since #27
+
+
 # --- screen text (OCR, #9 item 4) ---------------------------------------------------------------------------
 
 

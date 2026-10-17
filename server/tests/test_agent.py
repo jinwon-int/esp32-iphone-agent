@@ -579,3 +579,12 @@ def test_actor_is_told_never_to_touch_the_delete_badge_in_edit_mode():
 
     text = " ".join(ACTOR_PROMPT.split()).lower()
     assert "minus" in text and "remove app" in text
+
+
+def test_actor_knows_how_to_rename_a_folder_and_which_menu_entries_to_avoid():
+    from hidagent.agent import ACTOR_PROMPT
+
+    text = " ".join(ACTOR_PROMPT.split()).lower()
+    assert "rename a home screen folder" in text and "choose rename" in text
+    assert "key cmd+a" in text and "key enter" in text and "folder's title" in text
+    assert "remove from home screen" in text
