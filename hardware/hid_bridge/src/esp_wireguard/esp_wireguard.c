@@ -121,9 +121,16 @@ static esp_err_t esp_wireguard_peer_init(const wireguard_config_t *config, struc
             goto fail;
         }
 
-        // Only the single IP is allowed, thus /32 netmask, leaving to the user
-        // the responsibility to set the appropriate list of other allowed IPs.
+        // LOCAL CHANGE (esp32-iphone-agent, see VENDORED.md): the tunnel network (address/netmask) goes through
+        // the peer. Upstream allows only the single IP (/32) and leaves the rest to esp_wireguard_add_allowed_ip(),
+        // but this build has one allowed IP per peer (WIREGUARD_MAX_SRC_IPS 1), so nothing could be added and every
+        // packet to the hub was dropped (ERR_RTE). Without a netmask, only the single IP (/32) as upstream.
         ip_addr_t allowed_mask = IPADDR4_INIT_BYTES(255, 255, 255, 255);
+        if (config->netmask && config->netmask[0] && ipaddr_aton(config->netmask, &allowed_mask) != 1) {
+            ESP_LOGE(TAG, "peer_init: invalid netmask: `%s`", config->netmask);
+            err = ESP_ERR_INVALID_ARG;
+            goto fail;
+        }
         peer->allowed_mask = allowed_mask;
     }
     ESP_LOGI(TAG, "default allowed_ip: %s/%s", config->address, ipaddr_ntoa(&(peer->allowed_mask)));
