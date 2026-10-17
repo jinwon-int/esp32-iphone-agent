@@ -54,6 +54,11 @@ CARRY_Y = 0.80          # ... at this height: below the last icon row's labels, 
                         # item never rests beside an icon (at 0.62 it sat next to column 4 and made a folder, #35)
 FLIP_CELLS = 0.5        # vision.cells_changed against the page before above this: the page is turning (a turn
                         # 0.54-0.88; a folder forming or an icon lifting/dropping 0.04-0.33; device frames 2026-10-17)
+FLIP_MOTION = 10.0      # vision.page_change between two newly pushed frames above this: the content is sliding
+FLIP_MOTION_FRAMES = 2  # ... on this many new frames in a row: a turn even between look-alike pages. Pages of
+                        # folders in the same slots kept cells_changed at 0.42 through a whole turn, so only the
+                        # next turn was seen and two pages turned (#54); turns slid 12.7/15.8 and 26.9/28.0, the
+                        # last page's bounce at the edge once 14.8 (device frames 2026-10-18)
 FLIP_STILL = 6.0        # vision.page_change between two polls below this: the turn's animation is over
 FLIP_SETTLE_MIN = 0.25  # seconds after the turn began before it may count as over (the animation)
 FLIP_SETTLE_MAX = 1.0   # seconds to wait for that before leaving the edge anyway
@@ -400,7 +405,7 @@ class Phone:
         on ``target`` there. Edit mode only.
 
         Picks the item up (``pick`` + slow ``lift``), holds it at the screen edge and watches the live screen: as soon
-        as the page starts to turn (vision.page_change above FLIP_CHANGE) it leaves the edge, so exactly one page
+        as the page starts to turn (see _turn_started) and the turn has settled it leaves the edge, so exactly one page
         turns. Timing the hold instead turned one to three pages for the same wait (#35); while held on, iOS turns
         page after page with no still moment between them, so only the first turn can be told apart reliably.
         For two pages, carry twice with an empty spot on the page between. Returns 1. When the page does not turn
@@ -459,13 +464,21 @@ class Phone:
             prev = now
 
     async def _turn_started(self, before: bytes | None) -> bool:
-        """Wait at the edge until the screen content moves away from ``before`` (a page turn has begun)."""
-        waited = 0.0
+        """Wait at the edge until a page turn has begun: most of the content differs from ``before``, or the content
+        slides on FLIP_MOTION_FRAMES newly pushed frames in a row (look-alike pages differ in few cells, #54)."""
+        waited, prev, sliding = 0.0, before, 0
         while waited < FLIP_TIMEOUT:
             await asyncio.sleep(FLIP_POLL)
             waited += FLIP_POLL
-            if vision.cells_changed(before, self.screen.frame) > FLIP_CELLS:
+            now = self.screen.frame
+            if vision.cells_changed(before, now) > FLIP_CELLS:
                 return True
+            if now is prev:  # no new frame yet
+                continue
+            sliding = sliding + 1 if vision.page_change(prev, now) > FLIP_MOTION else 0
+            if sliding >= FLIP_MOTION_FRAMES:
+                return True
+            prev = now
         return False
 
     async def scroll(self, x: float, y: float, lines: int) -> None:
