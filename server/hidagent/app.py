@@ -173,9 +173,15 @@ class LongPress(Point):
     seconds: float = Field(LONG_PRESS, gt=0, le=5)  # bounded: a button held for minutes is a stuck finger
 
 
+class Via(Point):
+    rest: float = Field(0, ge=0, le=5)  # seconds to stay here, e.g. at the screen edge until the page turns
+
+
 class Drag(Swipe):
     pick: float = Field(PICK_UP, ge=0, le=3)  # hold still after pressing, so iOS lifts the item
     rest: float = Field(DROP, ge=0, le=3)     # stay on the target before letting go (icon on icon = folder)
+    lift: float = Field(0, ge=0, le=2)        # seconds for the first few hundredths of the way (#35)
+    via: list[Via] = Field(default_factory=list, max_length=4)  # points passed on the way, each with a rest
 
 
 class Text(BaseModel):
@@ -274,8 +280,11 @@ async def longpress(p: LongPress):
 @app.post("/api/drag")
 async def drag(d: Drag):
     """Pick up the item at 1, carry it to 2, drop it: Home Screen icons in edit mode, list rows by their handle."""
-    return await act(phone.drag([(d.x1, d.y1), (d.x2, d.y2)], pick=d.pick, rest=d.rest, aim=True),
-                     (d.x1, d.y1), (d.x2, d.y2))
+    points = [(d.x1, d.y1), *[(v.x, v.y) for v in d.via], (d.x2, d.y2)]
+    extra = {"stops": [v.rest for v in d.via]} if d.via else {}
+    if d.lift:
+        extra["lift"] = d.lift
+    return await act(phone.drag(points, pick=d.pick, rest=d.rest, aim=True, **extra), *points)
 
 
 @app.post("/api/scroll")

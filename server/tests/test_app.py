@@ -216,8 +216,8 @@ def test_longpress_and_drag_endpoints(web, monkeypatch):
         async def long_press(self, x, y, seconds=1.0, aim=False):
             calls.append(("long_press", x, y, seconds))
 
-        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False):
-            calls.append(("drag", points, pick, rest, aim))
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0):
+            calls.append(("drag", points, pick, rest, aim) + ((stops, lift) if stops or lift else ()))
 
     monkeypatch.setattr(module, "screen", FakeScreen())
     monkeypatch.setattr(module, "phone", FakePhone())
@@ -250,3 +250,27 @@ def test_startup_log_names_where_the_tokens_are_kept_never_their_values(web, mon
     assert ui not in text and push not in text
     assert str(module.DATA_DIR / "ui_token") in text and str(module.DATA_DIR / "push_token") in text
     assert "ws://100.64.0.1:8891/" in text
+
+
+def test_drag_endpoint_passes_via_points_and_lift(web, monkeypatch):
+    module, client = web
+    calls = []
+
+    class FakeScreen:
+        live, aspect, frame = True, 90 / 195, None
+
+        async def settled(self, **_):
+            return 0.3, True
+
+    class FakePhone:
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0):
+            calls.append((points, pick, rest, stops, lift))
+
+    monkeypatch.setattr(module, "screen", FakeScreen())
+    monkeypatch.setattr(module, "phone", FakePhone())
+    r = client.post("/api/drag", json={"x1": 0.85, "y1": 0.14, "x2": 0.5, "y2": 0.6, "pick": 0.9, "rest": 1.0,
+                                       "lift": 0.6, "via": [{"x": 0.985, "y": 0.45, "rest": 2.5}]})
+    assert r.status_code == 200
+    assert calls == [([(0.85, 0.14), (0.985, 0.45), (0.5, 0.6)], 0.9, 1.0, [2.5], 0.6)]
+    assert client.post("/api/drag", json={"x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2,
+                                          "via": [{"x": 0.9, "y": 0.5, "rest": 9}]}).status_code == 422
