@@ -36,8 +36,14 @@ THINK: <plain English a non-technical user understands: first check your last ac
 DO: <action>
 
 Give several DO lines (up to 6, run in order) whenever the next actions do not depend on seeing the
-result: e.g. ticking several visible checkboxes or days, several drawing strokes, typing then pressing enter.
+result: e.g. ticking several visible checkboxes or days, several drawing strokes, clearing a field then typing.
 Give ONE DO line when the next action depends on what this one opens or changes.
+A type action always ends the reply (anything after it is not run): read the typed text on the next screenshot
+before pressing enter. done is always alone in its reply, after a screenshot that shows the result.
+The screenshot is always the current screen: never assume it is outdated. If it does not show the goal reached,
+the goal is not reached yet.
+Never tap or long press the Dynamic Island or the status bar at the very top (y below 60): the red recording
+indicator there asks to stop screen sharing, and without the screen you can no longer see the phone.
 
 Coordinates are integers 0-1000 relative to the screenshot (x left->right, y top->bottom), NOT pixels:
 the request gives the screenshot's pixel size, so convert (x = pixel x * 1000 / width). The centre is 500 500.
@@ -274,6 +280,9 @@ class Agent:
         thought = acts[0].get("thought", "")
         for i, act in enumerate(acts):
             name = act["action"]
+            if name in TERMINAL and i > 0:  # done must rest on a screenshot taken after the last action (#36)
+                log.info("agent: %s after actions in the same reply not taken; looking again", name)
+                break
             if name == "replan" or stuck:
                 self._record(act.pop("_shot"), **act)
                 await self._replan(stuck=stuck)
@@ -291,6 +300,8 @@ class Agent:
                 self._attach(check, len(self.steps) - 1)
             if name in TERMINAL:
                 return True
+            if name == "type":  # the text may come out in the other alphabet: look before enter (#36, "skfTl")
+                break
             following = acts[i + 1]["action"] if i < len(acts) - 1 else None
             if name == "tap" and following in ("type", "key"):  # typing into a field that a missed tap never opened
                 await self._settle()
