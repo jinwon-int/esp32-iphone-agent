@@ -52,8 +52,9 @@ LIFT_STEPS = 6          # reports (absolute) or moves (relative) over that stret
 EDGE_X = (0.015, 0.985) # where carry() holds an item so iOS turns the page (left, right)
 CARRY_Y = 0.80          # ... at this height: below the last icon row's labels, above the page dots, so the held
                         # item never rests beside an icon (at 0.62 it sat next to column 4 and made a folder, #35)
-FLIP_CHANGE = 15.0      # vision.page_change against the page before above this: the page is turning (a turn scores
-                        # 20-45, edit mode's wiggle 2-3, the held icon moving 4-10; device frames 2026-10-17)
+FLIP_CELLS = 0.5        # vision.cells_changed against the page before above this: the page is turning (a turn
+                        # 0.54-0.88; a folder forming or an icon lifting/dropping 0.04-0.33; device frames 2026-10-17)
+LIFT_GONE = 20.0        # vision.region_change at the start slot above this once at the edge: the item was lifted
 FLIP_POLL = 0.05        # seconds between screen checks while holding at the edge
 FLIP_SETTLE = 0.6       # seconds for the turn's animation before the item is carried on, off the edge
 FLIP_TIMEOUT = 4.0      # seconds at the edge without a page turn: give up and put the item back
@@ -408,12 +409,16 @@ class Phone:
             raise RuntimeError("carrying across pages needs the live screen to see the page turn")
         edge = (EDGE_X[1] if pages > 0 else EDGE_X[0], CARRY_Y)
         await self.point(*start)
+        resting = self.screen.frame  # the start slot with the item in it
         await self.device.send("press")
         try:
             if pick:
                 await asyncio.sleep(pick)
             last = await self._lift(start, edge, lift) if lift else start
             await self._glide(last, edge)
+            await asyncio.sleep(FLIP_POLL)
+            if vision.region_change(resting, self.screen.frame, start) <= LIFT_GONE:  # still in its slot (#35)
+                raise RuntimeError("the item did not lift (is the Home Screen in edit mode, and settled?)")
             if not await self._turn_started(self.screen.frame):
                 await self._glide(edge, start)
                 await asyncio.sleep(rest)
@@ -437,7 +442,7 @@ class Phone:
         while waited < FLIP_TIMEOUT:
             await asyncio.sleep(FLIP_POLL)
             waited += FLIP_POLL
-            if vision.page_change(before, self.screen.frame) > FLIP_CHANGE:
+            if vision.cells_changed(before, self.screen.frame) > FLIP_CELLS:
                 return True
         return False
 

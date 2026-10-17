@@ -254,13 +254,18 @@ def test_absolute_pointer_is_woken_before_acting_after_a_pause(tmp_path, monkeyp
 # --- carry: hold at the edge until the screen shows N page turns (#35) -------------------------------------------
 
 
-def _jpeg(value):
+def _jpeg(value, icon=None):
+    """A solid page; ``icon`` (x, y fractions) draws a white icon there."""
     import io
 
-    from PIL import Image
+    from PIL import Image, ImageDraw
 
+    im = Image.new("RGB", (90, 195), (value, value, value))
+    if icon:
+        x, y = icon[0] * 90, icon[1] * 195
+        ImageDraw.Draw(im).rectangle((x - 7, y - 7, x + 7, y + 7), fill=(255, 255, 255))
     out = io.BytesIO()
-    Image.new("RGB", (90, 195), (value, value, value)).save(out, "JPEG")
+    im.save(out, "JPEG")
     return out.getvalue()
 
 
@@ -291,7 +296,7 @@ def carry_phone(tmp_path, monkeypatch, script):
 def test_carry_leaves_the_edge_as_soon_as_the_page_starts_to_turn(tmp_path, monkeypatch):
     # held on, iOS turns page after page with no still moment between (device frames 2026-10-17): leave at the first
     p1, p2, p3 = _jpeg(30), _jpeg(130), _jpeg(230)
-    script = [p1] * 40 + [_jpeg(80)] + [p2] * 8 + [_jpeg(170)] + [p3] * 40
+    script = [_jpeg(30, (0.85, 0.13))] * 3 + [p1] * 37 + [_jpeg(80)] + [p2] * 8 + [_jpeg(170)] + [p3] * 40
     phone, device = carry_phone(tmp_path, monkeypatch, script)
     assert asyncio.run(phone.carry((0.85, 0.13), (0.5, 0.6), pages=1, pick=0.5, lift=0.6, rest=1.0)) == 1
     assert device.sent[-2:] == ["sleep 1.0", "release"]
@@ -306,13 +311,14 @@ def test_carry_leaves_the_edge_as_soon_as_the_page_starts_to_turn(tmp_path, monk
 
 def test_carry_turns_left_for_negative_pages(tmp_path, monkeypatch):
     p1, p2 = _jpeg(30), _jpeg(200)
-    phone, device = carry_phone(tmp_path, monkeypatch, [p1] * 40 + [_jpeg(120)] + [p2] * 30)
+    script = [_jpeg(30, (0.5, 0.5))] * 3 + [p1] * 37 + [_jpeg(120)] + [p2] * 30
+    phone, device = carry_phone(tmp_path, monkeypatch, script)
     assert asyncio.run(phone.carry((0.5, 0.5), (0.3, 0.6), pages=-1)) == 1
     assert any(c.startswith(f"at {round(0.015 * ABS_MAX)} ") for c in device.sent)
 
 
 def test_carry_puts_the_item_back_when_no_page_turns(tmp_path, monkeypatch):
-    phone, device = carry_phone(tmp_path, monkeypatch, [_jpeg(30)] * 400)
+    phone, device = carry_phone(tmp_path, monkeypatch, [_jpeg(30, (0.3, 0.3))] * 3 + [_jpeg(30)] * 400)
     with pytest.raises(RuntimeError, match="page did not turn"):
         asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1))
     assert device.sent[-1] == "release"
@@ -328,3 +334,21 @@ def test_carry_needs_a_live_screen_and_a_page_count(tmp_path):
     for pages in (0, 2, -2):
         with pytest.raises(ValueError):
             asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=pages))
+
+
+def test_carry_stops_when_the_item_did_not_lift(tmp_path, monkeypatch):
+    # device 2026-10-17: right after entering edit mode the icon stayed in its slot while the pointer went to the
+    # edge, lifted late and formed a folder; now the start slot is checked once at the edge
+    phone, device = carry_phone(tmp_path, monkeypatch, [_jpeg(30, (0.3, 0.3))] * 400)
+    with pytest.raises(RuntimeError, match="did not lift"):
+        asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1))
+    assert device.sent[-1] == "release" and "sleep 0.05" in device.sent
+
+
+def test_a_folder_forming_is_not_a_page_turn(tmp_path, monkeypatch):
+    # a local change (one cell) must not count as a turn: no turn -> the item is put back
+    start = (0.3, 0.3)
+    local = _jpeg(30, (0.85, 0.7))  # something changed in one spot only (a folder forming beside the edge)
+    phone, _ = carry_phone(tmp_path, monkeypatch, [_jpeg(30, start)] * 3 + [_jpeg(30)] * 37 + [local] * 400)
+    with pytest.raises(RuntimeError, match="page did not turn"):
+        asyncio.run(phone.carry(start, (0.5, 0.6), pages=1))
