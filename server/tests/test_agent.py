@@ -588,3 +588,71 @@ def test_actor_knows_how_to_rename_a_folder_and_which_menu_entries_to_avoid():
     assert "rename a home screen folder" in text and "choose rename" in text
     assert "key cmd+a" in text and "key enter" in text and "folder's title" in text
     assert "remove from home screen" in text
+
+
+def _batch_agent(monkeypatch, reply):
+    """An agent whose actor answers one fixed reply; returns (agent, calls the phone received)."""
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    monkeypatch.setattr("hidagent.agent.vision.changed", lambda *a, **k: True)  # frames here are not real JPEGs
+    calls = []
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+        async def settled(self, **_):
+            return 0.3, True
+
+    class Phone:
+        async def tap(self, x, y, aim=False):
+            calls.append(("tap", x, y))
+        async def key(self, combo):
+            calls.append(("key", combo))
+        async def type(self, text):
+            calls.append(("type", text))
+
+    class Actor:
+        model = "fake"
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            return reply
+
+    agent = Agent(phone=Phone(), screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None))
+    agent.task = "t"
+    return agent, calls
+
+
+def test_typing_ends_the_batch_so_the_actor_sees_the_text_before_enter(monkeypatch):
+    # #36 device run: cmd+a, backspace, type 날씨, enter in one reply typed "skfTl" (English input language)
+    # and confirmed it unseen; the "switch with ctrl+space" rule never had a chance
+    import asyncio
+
+    agent, calls = _batch_agent(monkeypatch, "THINK: rename\nDO: key cmd+a\nDO: key backspace\nDO: type 날씨\n"
+                                             "DO: key enter")
+    assert asyncio.run(agent._step()) is False
+    assert calls == [("key", "cmd+a"), ("key", "backspace"), ("type", "날씨")]  # enter waits for a look
+    assert agent.steps[-1]["action"] == "type" and agent.steps[-1]["changed"] is True
+
+
+def test_done_after_actions_in_the_same_reply_is_not_taken(monkeypatch):
+    # done must rest on a screenshot taken after the last action, not on the one the batch was planned on
+    import asyncio
+
+    agent, calls = _batch_agent(monkeypatch, "THINK: close it\nDO: tap 500 950\nDO: done Renamed")
+    assert asyncio.run(agent._step()) is False
+    assert calls == [("tap", 0.5, 0.95)]
+    assert [s["action"] for s in agent.steps] == ["tap"]
+
+
+def test_done_alone_still_ends_the_run(monkeypatch):
+    import asyncio
+
+    agent, calls = _batch_agent(monkeypatch, "THINK: the label reads 날씨\nDO: done Renamed")
+    assert asyncio.run(agent._step()) is True and calls == [] and agent.steps[-1]["action"] == "done"
+
+
+def test_actor_is_told_to_trust_the_screenshot_and_to_avoid_the_dynamic_island():
+    from hidagent.agent import ACTOR_PROMPT
+
+    text = " ".join(ACTOR_PROMPT.split()).lower()
+    assert "never assume it is outdated" in text
+    assert "dynamic island" in text and "stop screen sharing" in text

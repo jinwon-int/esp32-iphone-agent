@@ -28,6 +28,8 @@ log = logging.getLogger(__name__)
 CALIBRATION_MOVE = 200  # mouse units moved diagonally for a manual (one point) calibration; stays on screen
 CALIBRATION_STOPS = (150, 350)  # automatic calibration finds the pointer at these distances from the corner
 REHOME_EVERY = 10       # gestures between re-homing
+EDGE = 0.06             # screen fraction; after a gesture this close to an edge the next one re-homes first: the
+                        # pointer stops at the edge, so the tracked position may no longer be where it is (#36)
 HOLD = 0.25             # seconds to rest before lifting, so iOS adds no momentum (the swipe stops where it ends)
 TAP_GAP = 0.15          # seconds to stay still after a click, so iOS sees a finished tap, not the start of a drag
 LONG_PRESS = 1.0        # seconds the button stays down for a long press (context menus, Home Screen edit mode)
@@ -261,6 +263,9 @@ class Phone:
         self._pos = None  # unknown until the move succeeds
         await self.device.send(f"move {tx - x} {ty - y}")
         self._pos, self._moves = (tx, ty), self._moves + 1
+        fx, fy = tx / self.span["w"], ty / self.span["h"]
+        if min(fx, fy, 1 - fx, 1 - fy) < EDGE:
+            self._moves = REHOME_EVERY  # re-anchor before the next gesture (mid-drag moves never home)
 
     async def _at(self, x: float, y: float) -> None:
         ax, ay = (round(min(max(t, 0), 1) * ABS_MAX) for t in (x, y))

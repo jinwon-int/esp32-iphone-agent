@@ -177,3 +177,22 @@ def test_absolute_long_press_lands_then_holds(tmp_path, monkeypatch):
     i = device.sent.index("press")
     assert device.sent[i:i + 3] == ["press", "sleep 1.0", "release"]
     assert not any(c.startswith(("move", "home")) for c in device.sent)
+
+
+def test_a_gesture_near_the_screen_edge_rehomes_before_the_next_one(tmp_path):
+    # #36 device run: after a tap on the top-edge checkmark the next long press landed on the Dynamic Island
+    # (screen sharing's stop prompt); the pointer stops at an edge, so dead reckoning is re-anchored there
+    phone, device = make_phone(tmp_path)
+    asyncio.run(phone.tap(0.5, 0.5))
+    asyncio.run(phone.tap(0.83, 0.035))  # top edge
+    device.sent.clear()
+    asyncio.run(phone.tap(0.4, 0.13))
+    assert device.sent[0] == "home" and device.sent[1] == "move 200 130"
+
+
+def test_a_gesture_away_from_the_edges_keeps_dead_reckoning(tmp_path):
+    phone, device = make_phone(tmp_path)
+    asyncio.run(phone.tap(0.5, 0.5))
+    device.sent.clear()
+    asyncio.run(phone.tap(0.4, 0.13))
+    assert "home" not in device.sent and device.sent[0] == "move -50 -370"

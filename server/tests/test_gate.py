@@ -189,7 +189,8 @@ class Actor:
 
     async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
         self.prompts.append(text)
-        return "THINK: The message field is open; I type and tap Send.\nDO: type hello\nDO: tap 900 950"
+        # (type ends a reply, #36: the field tap comes first so each round still runs two actions)
+        return "THINK: I tap the message field and type.\nDO: tap 500 900\nDO: type hello"
 
 
 def run_steps(gate, monkeypatch, rounds=2, pause=0.0):
