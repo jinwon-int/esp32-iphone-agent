@@ -53,7 +53,7 @@ EDGE_X = (0.015, 0.985) # where carry() holds an item so iOS turns the page (lef
 CARRY_Y = 0.62          # ... at this height: below the top rows, above the page dots
 FLIP_CHANGE = 15.0      # vision.page_change against the page before above this: the page is turning (a turn scores
                         # 20-45, edit mode's wiggle 2-3, the held icon moving 4-10; device frames 2026-10-17)
-FLIP_POLL = 0.1         # seconds between screen checks while holding at the edge
+FLIP_POLL = 0.05        # seconds between screen checks while holding at the edge
 FLIP_SETTLE = 0.6       # seconds for the turn's animation before the item is carried on, off the edge
 FLIP_TIMEOUT = 4.0      # seconds at the edge without a page turn: give up and put the item back
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
@@ -417,11 +417,18 @@ class Phone:
                 await self._glide(edge, start)
                 await asyncio.sleep(rest)
                 raise RuntimeError(f"page did not turn within {FLIP_TIMEOUT} s at the screen edge")
-            await self._glide(edge, target)  # off the edge at once: no second page turn
+            await self._jump(target)  # off the edge in one report: the next turn came 0.45 s after the first (#35)
             await asyncio.sleep(max(rest, FLIP_SETTLE))
         finally:
             await self.device.send("release")
         return 1
+
+    async def _jump(self, to: tuple[float, float]) -> None:
+        """Leave the screen edge with the button down in one step (absolute: a single report; relative: one move)."""
+        if self.absolute:
+            await self._at(*to)
+        else:
+            await self._move_to(self._dx(to[0]), self._dy(to[1]), rehome=False)
 
     async def _turn_started(self, before: bytes | None) -> bool:
         """Wait at the edge until the screen content moves away from ``before`` (a page turn has begun)."""
