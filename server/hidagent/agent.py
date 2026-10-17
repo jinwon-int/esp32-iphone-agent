@@ -42,11 +42,12 @@ A type action always ends the reply (anything after it is not run): read the typ
 before pressing enter. done is always alone in its reply, after a screenshot that shows the result.
 The screenshot is always the current screen: never assume it is outdated. If it does not show the goal reached,
 the goal is not reached yet.
-Never tap or long press the Dynamic Island or the status bar at the very top (y below 60): the red recording
-indicator there asks to stop screen sharing, and without the screen you can no longer see the phone.
+Never tap or long press the Dynamic Island or the status bar at the very top (the top 6 % of the screenshot):
+the red recording indicator there asks to stop screen sharing, and without the screen you can no longer see
+the phone.
 
-Coordinates are integers 0-1000 relative to the screenshot (x left->right, y top->bottom), NOT pixels:
-the request gives the screenshot's pixel size, so convert (x = pixel x * 1000 / width). The centre is 500 500.
+Positions are integer pixels on the screenshot exactly as you see it (x from the left edge, y from the top
+edge); the request gives its size. Read them off the image; never rescale them to another unit.
 Aim at the visual center of the element you want, not its edge or its label.
 Look before you act: describe what is really on the screen now, not what you expect.
 Each recent action says whether the screen changed after it. If it did NOT change, the action
@@ -54,7 +55,7 @@ missed or had no effect: do not assume it worked; aim again more precisely or tr
 Only type when a text field is visibly focused (a text cursor or highlighted field; the on-screen keyboard
 may stay hidden because the board is a hardware keyboard).
 Swipes have no momentum: content moves exactly as far as the finger and stops. Prefer short swipes
-(100-250 units) and check the result; repeat if needed rather than one big swipe.
+(10-25 % of the screen height) and check the result; repeat if needed rather than one big swipe.
 Time or number wheels (e.g. an alarm's time): first tap the number in the wheel's center row and type
 the digits (e.g. type 0700); check the result. Only if typing does not work, swipe inside that column:
 measure the row spacing from two neighbouring numbers and swipe k times that spacing to move k rows.
@@ -68,8 +69,9 @@ Confirm or Sign out button, and never change account, password or security setti
 up to that point, then reply "confirm" with what is ready; the user does the last tap.
 In Home Screen edit mode (icons wiggle) never tap the small minus badge on an icon: it leads to Remove App and
 Delete App. To leave edit mode, tap Done.
-In an item's menu (after a long press) choose only the entry the goal needs; never Remove App, Delete App or
-Remove from Home Screen.
+In an item's menu (after a long press) choose only the entry the goal needs; never Remove App, Delete App,
+Remove Folder or Remove from Home Screen. Read the entry's text before tapping it: entries sit close together.
+If a dialog asks to remove or delete something you did not mean to, tap Cancel.
 To rename a Home Screen folder: long press the folder and choose Rename, or in edit mode tap the folder to open it
 and tap its name at the top. When the name shows a text cursor, clear it (key cmd+a, then key backspace), type the
 new name, then key enter. Check the new name in the open folder's title: the label under the icon may be shortened.
@@ -83,7 +85,7 @@ Actions:
                              icon in edit mode (dropping it onto another app makes a folder) or a list row by its
                              handle; to scroll, use swipe, not drag)
   path X1 Y1 X2 Y2 X3 Y3 …  (one continuous stroke through 2-20 points, for drawing)
-  circle X Y R              (draw a circle centered at X Y; R is the radius in x units)
+  circle X Y R              (draw a circle centered at X Y; R is the radius in pixels)
   type TEXT                 (English or Korean, not both in one action; tap the input field first. Look at the
                              field afterwards: if the text came out in the other alphabet (e.g. "ㅁㅠㅊ" for abc,
                              or "tjfwjd" for 설정), the input language is wrong: clear the field (key cmd+a, then
@@ -107,7 +109,7 @@ DO: tap 152 362"""
 META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed", "settle_s", "stable",
         "ocr_s", "gate")  # not the action
 
-# action name -> argument names; numeric arguments are 0-1000 screen coordinates
+# action name -> argument names; numeric arguments are stored as 0-1000 of each screen axis (the actor gives pixels)
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
            "longpress": ("x", "y"), "drag": ("x1", "y1", "x2", "y2"),
            "type": ("text",), "key": ("combo",), "done": ("answer",), "fail": ("reason",), "confirm": ("reason",),
@@ -117,11 +119,17 @@ TEXT_ARGS = ("text", "combo", "answer", "reason")
 
 
 class OffScreen(ValueError):
-    """A coordinate outside 0-1000: the actor misjudged the screen; ask it again instead of acting off-screen."""
+    """A position outside the screenshot: the actor misjudged the screen; ask it again instead of acting off-screen."""
 
 
-def parse_command(line: str) -> dict:
-    """One DO line, e.g. "tap 152 362" -> {"action": "tap", "x": 152, "y": 362}."""
+def parse_command(line: str, size: tuple[int, int] | None = None) -> dict:
+    """One DO line, e.g. "tap 152 362" -> {"action": "tap", "x": 258, "y": 283} on a 590x1280 screenshot.
+
+    The actor gives pixel positions on the screenshot it saw (``size`` = its width, height): models fall back to
+    pixels however often they are asked for another unit (#17, the 2026-10-17 re-test of #38). They are stored as
+    0-1000 of each axis, the unit everything after the actor uses. Without a size the screenshot counts as
+    1000x1000, so positions are taken as they are.
+    """
     name, _, rest = line.strip().partition(" ")
     name = name.lower()
     if name not in ACTIONS:
@@ -129,9 +137,15 @@ def parse_command(line: str) -> dict:
     keys = ACTIONS[name]
     if keys and keys[0] in TEXT_ARGS:
         return {"action": name, keys[0]: rest.strip().strip('"')}
-    numbers = [int(float(n)) for n in re.findall(r"-?\d+(?:\.\d+)?", rest)]
-    if any(not 0 <= n <= 1000 for n in numbers):  # e.g. "tap 63 1218" (#17-C): never act off the screen
-        raise OffScreen(f"{name} coordinates must be 0-1000: {line[:100]}")
+    w, h = size or (1000, 1000)
+    numbers = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", rest)]
+    axes = ["y" if i % 2 else "x" for i in range(len(numbers))] if keys == ("points",) else \
+        ["y" if k.startswith("y") else "x" for k in keys[:len(numbers)]]  # circle's r is measured along x
+    span = {"x": w, "y": h}
+    if any(not 0 <= n <= span[a] for n, a in zip(numbers, axes, strict=False)):  # never act off the screen
+        raise OffScreen(f"{name} positions must be inside the {w}x{h} screenshot: {line[:100]}")
+    numbers = [round(n * 1000 / span[a]) for n, a in zip(numbers, axes, strict=False)] + \
+        [int(n) for n in numbers[len(axes):]]
     if keys == ("points",):
         if len(numbers) < 4 or len(numbers) % 2:
             raise ValueError(f"path needs 2+ x y pairs: {line[:100]}")
@@ -144,11 +158,12 @@ def parse_command(line: str) -> dict:
     return action
 
 
-def parse_actions(text: str) -> list[dict]:
+def parse_actions(text: str, size: tuple[int, int] | None = None) -> list[dict]:
     """Parse a THINK / DO… reply (an optional ZH line is kept); the thought goes on the first action."""
     thought = re.search(r"^\s*THINK\s*[:：]\s*(.*?)\s*$", text, re.M | re.I)
     zh = re.search(r"^\s*ZH\s*[:：]\s*(.*?)\s*$", text, re.M | re.I)
-    acts = [parse_command(line) for line in re.findall(r"^\s*DO\s*[:：]\s*(.*?)\s*$", text, re.M | re.I)][:6]
+    acts = [parse_command(line, size)
+            for line in re.findall(r"^\s*DO\s*[:：]\s*(.*?)\s*$", text, re.M | re.I)][:6]
     if not acts:
         raise ValueError(f"no DO line in reply: {text[:200]}")
     acts[0] = {"thought": thought.group(1) if thought else "", "thought_zh": zh.group(1) if zh else "", **acts[0]}
@@ -164,6 +179,25 @@ def parse_plan(text: str) -> tuple[str, str]:
 def _key(step: dict) -> dict:
     """The action itself, without thoughts, timings and other bookkeeping."""
     return {k: v for k, v in step.items() if k not in META}
+
+
+def _in_pixels(step: dict, size: tuple[int, int] | None) -> dict:
+    """A recorded step with its 0-1000 positions back in the actor's unit, pixels of a w x h screenshot."""
+    w, h = size or (1000, 1000)
+    out = dict(step)
+    for k in ("x", "x1", "x2", "r", "y", "y1", "y2"):
+        if isinstance(out.get(k), (int, float)):
+            out[k] = round(out[k] * (h if k.startswith("y") else w) / 1000)
+    if "points" in out:
+        out["points"] = [[round(x * w / 1000), round(y * h / 1000)] for x, y in out["points"]]
+    return out
+
+
+def _as_line(act: dict, size: tuple[int, int] | None) -> str:
+    """An action as the actor would write it, e.g. "longpress 226 169"."""
+    px = _in_pixels(_key(act), size)
+    args = [str(px[k]) for k in ACTIONS.get(act["action"], ()) if isinstance(px.get(k), (int, float))]
+    return " ".join([act["action"], *args])
 
 
 class BlindError(RuntimeError):
@@ -348,6 +382,18 @@ class Agent:
         """The previous round changed nothing on screen, so a tap may have landed off target."""
         return bool(self.steps) and self.steps[-1].get("changed") is False
 
+    def _tried_twice(self, act: dict, window: int = 6) -> bool:
+        """True when this tap or long press, at the same spot, is already twice among the last window moves.
+
+        Catches "miss -> close the wrong menu -> the same miss" loops, which the last-action checks never see
+        because the screen did change each time. A goal that really needs the same tap again can batch it.
+        """
+        if act["action"] not in ("tap", "longpress"):
+            return False
+        spot = (act["action"], act.get("x"), act.get("y"))
+        moves = [s for s in self.steps if "plan" not in s][-window:]
+        return sum((m.get("action"), m.get("x"), m.get("y")) == spot for m in moves) >= 2
+
     def _repeating(self, act: dict, limit: int = 3) -> bool:
         """True when the actor picks the same action as its last limit-1 moves and the last one did nothing.
 
@@ -379,36 +425,42 @@ class Agent:
         hidden = ("t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed", "settle_s",
                   "stable", "ocr_s", "gate")
         effect = {True: " -> screen changed", False: " -> screen did NOT change"}
-        history = "\n".join(json.dumps({k: v for k, v in s.items() if k not in hidden})[:300]
+        size = self._shown_size()  # the actor's unit is pixels of this; None (unreadable frame): taken as 1000x1000
+        history = "\n".join(json.dumps(_in_pixels({k: v for k, v in s.items() if k not in hidden}, size))[:300]
                             + effect.get(s.get("changed"), "")
                             for s in self.steps[-8:] if "plan" not in s) or "(none)"
         prompt = f"Goal: {self.task}\n\nPlan:\n{self.plan}\n\nRecent actions:\n{history}"
         ocr_s = None
         if self.ocr is not None and getattr(self.ocr, "mode", "off") == "actor":
-            text = await self._screen_text()
+            text = await self._screen_text(size)
             ocr_s = self.ocr.last_s
             if text:
-                prompt += ("\n\nText read from the screen (OCR; x y = centre of each line in the same 0-1000 "
-                           "coordinates; when you tap a word or a row, aim with these instead of estimating):\n" + text)
-        if size := self._shown_size():  # models drift into pixel positions (#17): say what 0-1000 maps onto
+                prompt += ("\n\nText read from the screen (OCR; x y = centre of each line in pixels of the "
+                           "screenshot; when you tap a word or a row, aim with these instead of estimating):\n" + text)
+        if size:
             w, h = size
-            prompt += (f"\n\nThe screenshot is {w}x{h} pixels. Give positions in 0-1000 units, not pixels: "
-                       f"x = pixel x * 1000 / {w}, y = pixel y * 1000 / {h}.")
+            prompt += (f"\n\nThe screenshot is {w}x{h} pixels. Give positions as pixels on it "
+                       f"(0,0 top-left, {w},{h} bottom-right).")
         prompt += "\n\nNext action?"
         for attempt in range(3):  # retry unparseable replies, a little less deterministically
             reply, seconds, frame = await self._ask("actor", self.actor, ACTOR_PROMPT, prompt, 0.4 * attempt)
             try:
-                acts = parse_actions(reply)
+                acts = parse_actions(reply, size)
             except ValueError as e:
                 log.warning("unparseable actor reply (%s): %s", e, reply[:200])
                 if isinstance(e, OffScreen):
-                    prompt += (f"\n\nYour last reply was not used: {e}. The screenshot spans 0-1000 on both axes "
-                               "(0,0 top-left, 1000,1000 bottom-right), not pixels; give positions inside it.")
+                    prompt += f"\n\nYour last reply was not used: {e}. Give positions inside the screenshot."
                 continue
             if self._missed() and _key(acts[0]) == _key(self.steps[-1]):  # same move that just did nothing
                 log.info("actor repeated an action that changed nothing; asking for another")
-                prompt += (f"\n\nYou just proposed {json.dumps(_key(acts[0]))} again, but it changed nothing last "
+                prompt += (f"\n\nYou just proposed {_as_line(acts[0], size)} again, but it changed nothing last "
                            "time. Choose a different action (another position, a shorter swipe, or another way).")
+                continue
+            if self._tried_twice(acts[0]):  # e.g. a long press that keeps opening the wrong item's menu (#38 re-test)
+                log.info("actor proposed the same tap or long press a third time; asking for another")
+                prompt += (f"\n\nYou already did {_as_line(acts[0], size)} twice in your recent actions and the goal "
+                           "is still not reached. Measure the target's position on this screenshot again (in pixels) "
+                           "and choose another position or another way.")
                 continue
             acts[0]["think_s"] = seconds
             if ocr_s is not None:
@@ -416,10 +468,10 @@ class Agent:
             return [{**a, "_shot": frame} for a in acts]  # every action is drawn on the same screenshot
         raise ValueError(f"actor gave no valid action: {reply[:200]}")
 
-    async def _screen_text(self) -> str:
+    async def _screen_text(self, size: tuple[int, int] | None = None) -> str:
         """OCR lines for the actor's prompt, or "" when OCR fails: the actor still has the screenshot."""
         try:
-            return self.ocr.lines(await self.ocr.read(self.screen.frame))
+            return self.ocr.lines(await self.ocr.read(self.screen.frame), size or 1000)
         except Exception as e:  # noqa: BLE001 - an OCR hiccup must never cost the step
             log.warning("OCR skipped: %s", str(e)[:120])
             return ""

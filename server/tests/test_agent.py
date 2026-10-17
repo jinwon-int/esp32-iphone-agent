@@ -394,7 +394,8 @@ def test_actor_is_asked_again_after_an_off_screen_reply():
     agent.task = "t"
     acts = asyncio.run(agent._next_actions())
     assert [(a["action"], a["x"], a["y"]) for a in acts] == [("tap", 63, 975)]
-    assert "0-1000" in actor.prompts[-1] and "0-1000" not in actor.prompts[0].split("Next action?")[-1]
+    assert "inside the 1000x1000 screenshot" in actor.prompts[-1]  # no frame size here: taken as 1000x1000
+    assert "not used" not in actor.prompts[0]
 
 
 def test_actor_prompt_asks_to_check_the_item_name_before_done():
@@ -484,7 +485,7 @@ def _actor_prompt_for(frame: bytes, image_max: int = 0) -> str:
 
         async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
             self.prompts.append(text)
-            return "THINK: tap it\nDO: tap 500 500"
+            return "THINK: tap it\nDO: tap 100 100"
 
     actor = Actor()
     agent = Agent(phone=None, screen=Screen(), actor=actor, planner=actor, trace=Trace(None))
@@ -503,10 +504,12 @@ def _jpeg(w: int, h: int) -> bytes:
     return out.getvalue()
 
 
-def test_actor_is_told_the_pixel_size_it_sees_so_it_answers_in_0_1000():
-    """#17 on-device: the actor tapped (57, 121), the back button's centre in pixels of a 590x1280 frame."""
+def test_actor_is_told_the_pixel_size_it_sees_and_answers_in_it():
+    """#17 on-device: the actor tapped (57, 121), the back button's centre in pixels of a 590x1280 frame.
+
+    Pixels are now the actor's unit; the server converts them."""
     prompt = _actor_prompt_for(_jpeg(590, 1280))
-    assert "The screenshot is 590x1280 pixels" in prompt and "x = pixel x * 1000 / 590" in prompt
+    assert "The screenshot is 590x1280 pixels. Give positions as pixels on it" in prompt
     assert prompt.rstrip().endswith("Next action?")
 
 
@@ -518,10 +521,10 @@ def test_no_pixel_size_line_when_the_frame_cannot_be_read():
     assert "pixels. Give positions" not in _actor_prompt_for(b"jpeg")
 
 
-def test_actor_prompt_says_coordinates_are_not_pixels():
+def test_actor_prompt_never_asks_for_another_unit_than_pixels():
     from hidagent.agent import ACTOR_PROMPT
 
-    assert "NOT pixels" in ACTOR_PROMPT
+    assert "NOT pixels" not in ACTOR_PROMPT and "never rescale" in ACTOR_PROMPT
 
 
 def test_parse_longpress_and_drag():
@@ -656,3 +659,89 @@ def test_actor_is_told_to_trust_the_screenshot_and_to_avoid_the_dynamic_island()
     text = " ".join(ACTOR_PROMPT.split()).lower()
     assert "never assume it is outdated" in text
     assert "dynamic island" in text and "stop screen sharing" in text
+
+
+# --- pixel positions (#38 device re-test): the actor answers in pixels of the screenshot it sees ---------------
+
+
+def test_pixel_positions_are_stored_as_0_1000():
+    # the 2026-10-17 run: the 날씨 folder at pixel (226, 169) of a 590x1280 frame is (383, 132) in 0-1000
+    assert parse_command("longpress 226 169", (590, 1280)) == {"action": "longpress", "x": 383, "y": 132}
+    assert parse_command("swipe 295 1100 295 900", (590, 1280)) == {"action": "swipe", "x1": 500, "y1": 859,
+                                                                     "x2": 500, "y2": 703}
+    assert parse_command("path 0 0 590 1280", (590, 1280))["points"] == [[0, 0], [1000, 1000]]
+    assert parse_command("circle 295 640 59", (590, 1280)) == {"action": "circle", "x": 500, "y": 500, "r": 100}
+    assert parse_command("tap 590 1280", (590, 1280)) == {"action": "tap", "x": 1000, "y": 1000}  # the edges
+
+
+@pytest.mark.parametrize("line", ["tap 591 100", "tap 100 1281", "tap -1 5", "swipe 0 0 600 5", "path 1 2 3 1300"])
+def test_pixel_positions_outside_the_screenshot_are_refused(line):
+    from hidagent.agent import OffScreen
+
+    with pytest.raises(OffScreen, match="590x1280"):
+        parse_command(line, (590, 1280))
+
+
+def test_a_y_beyond_1000_is_fine_on_a_tall_screenshot():
+    # "tap 63 1218" (#17-C) was refused as off-screen in 0-1000 units; in pixels of 590x1280 it is on screen
+    assert parse_command("tap 63 1218", (590, 1280)) == {"action": "tap", "x": 107, "y": 952}
+
+
+def _pixel_agent(monkeypatch, replies, steps=()):
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+
+    class Actor:
+        model = "fake"
+        prompts = []
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            self.prompts.append(text)
+            return replies.pop(0)
+
+    agent = Agent(phone=None, screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None))
+    monkeypatch.setattr(agent, "_shown_size", lambda: (590, 1280))
+    agent.task, agent.steps = "t", list(steps)
+    return agent, Actor.prompts
+
+
+def test_actor_answers_are_read_as_pixels_and_its_history_is_shown_in_pixels(monkeypatch):
+    import asyncio
+
+    agent, prompts = _pixel_agent(monkeypatch, ["THINK: the folder\nDO: longpress 226 169"],
+                                  [{"action": "tap", "x": 500, "y": 500, "changed": True}])
+    acts = asyncio.run(agent._next_actions())
+    assert (acts[0]["x"], acts[0]["y"]) == (383, 132)
+    assert '"x": 295, "y": 640' in prompts[-1]  # its own unit, never the internal 0-1000
+
+
+def test_actor_screen_text_is_given_in_pixels(monkeypatch):
+    from hidagent.ocr import OCR
+
+    items = [{"text": "Wi-Fi", "x": 0.5, "y": 0.25}]
+    assert OCR.lines(items, (590, 1280)) == '"Wi-Fi" @ 295 320'
+    assert OCR.lines(items) == '"Wi-Fi" @ 500 250'  # the old single scale still works
+
+
+def test_a_third_identical_tap_or_long_press_is_sent_back(monkeypatch):
+    # the 2026-10-17 run: longpress (226,169) opened the wrong app's menu, a tap closed it, and the same long press
+    # came again and again; the guard only compared with the very last action
+    import asyncio
+
+    same = {"action": "longpress", "x": 383, "y": 132, "changed": True}
+    close = {"action": "tap", "x": 500, "y": 600, "changed": True}
+    agent, prompts = _pixel_agent(monkeypatch, ["THINK: again\nDO: longpress 226 169",
+                                                "THINK: measure again\nDO: longpress 226 300"],
+                                  [same, close, same, close])
+    acts = asyncio.run(agent._next_actions())
+    assert (acts[0]["x"], acts[0]["y"]) == (383, 234)
+    assert "twice" in prompts[-1] and "longpress 226 169" in prompts[-1]
+
+
+def test_actor_prompt_asks_for_pixel_positions():
+    from hidagent.agent import ACTOR_PROMPT
+
+    text = " ".join(ACTOR_PROMPT.split()).lower()
+    assert "pixels on the screenshot" in text and "0-1000" not in text
