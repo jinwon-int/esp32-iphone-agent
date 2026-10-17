@@ -52,6 +52,45 @@ def page_change(before: bytes | None, after: bytes | None) -> float:
     return sum(d) / len(d)
 
 
+def cells_changed(before: bytes | None, after: bytes | None, grid: tuple[int, int] = (4, 6),
+                  level: float = 20.0) -> float:
+    """Share of the content band's grid cells (4 x 6, about one icon each) whose mean grey difference exceeds
+    ``level``. A page turn changes most cells (0.54-0.88 on device frames); a folder forming, an icon lifting or
+    being dropped changes a few (0.04-0.33), so this tells a turn from local changes (#35). 0 without both frames.
+    """
+    if not before or not after:
+        return 0.0
+    a, b = _gray(before), _gray(after)
+    if a.size != b.size:
+        return 1.0
+    w, h = a.size
+    box = (0, int(0.06 * h), w, int(0.78 * h))
+    cw, ch = grid[0] * 8, grid[1] * 8
+    d = ImageChops.difference(a.crop(box).resize((cw, ch), Image.BILINEAR),
+                              b.crop(box).resize((cw, ch), Image.BILINEAR))
+    hit = 0
+    for cy in range(grid[1]):
+        for cx in range(grid[0]):
+            cell = d.crop((cx * 8, cy * 8, cx * 8 + 8, cy * 8 + 8)).tobytes()
+            hit += sum(cell) / len(cell) > level
+    return hit / (grid[0] * grid[1])
+
+
+def region_change(before: bytes | None, after: bytes | None, center: tuple[float, float],
+                  size: tuple[float, float] = (0.16, 0.08)) -> float:
+    """Mean grey difference (0-255) of a box around ``center`` (screen fractions): has the icon there gone?"""
+    if not before or not after:
+        return 0.0
+    a, b = _gray(before), _gray(after)
+    if a.size != b.size:
+        return 255.0
+    w, h = a.size
+    box = (int((center[0] - size[0] / 2) * w), int((center[1] - size[1] / 2) * h),
+           int((center[0] + size[0] / 2) * w), int((center[1] + size[1] / 2) * h))
+    d = ImageChops.difference(a.crop(box), b.crop(box)).tobytes()
+    return sum(d) / len(d) if d else 0.0
+
+
 def pointer(before: bytes, after: bytes, near: tuple[float, float], shift: float,
             reach: tuple[float, float] = (0.12, 0.08)) -> tuple[float, float] | None:
     """Where the pointer is in `before`, given it moved right by `shift` (fraction of width) in `after`.

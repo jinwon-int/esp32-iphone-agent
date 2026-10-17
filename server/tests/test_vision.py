@@ -97,3 +97,25 @@ def test_page_change_is_zero_for_the_same_page_and_large_for_another():
     assert page_change(a, a) < 1
     assert page_change(a, b) > 100
     assert page_change(None, a) == 0 and page_change(a, None) == 0  # no frame: no evidence of a turn
+
+
+def test_cells_changed_tells_a_page_turn_from_a_local_change():
+    import io
+
+    from PIL import Image, ImageDraw
+
+    from hidagent.vision import cells_changed, region_change
+
+    def page(color, spot=None):
+        im = Image.new("RGB", (90, 195), (color, color, color))
+        if spot:
+            ImageDraw.Draw(im).rectangle((spot[0] - 8, spot[1] - 8, spot[0] + 8, spot[1] + 8), fill=(255, 255, 255))
+        out = io.BytesIO()
+        im.save(out, "JPEG")
+        return out.getvalue()
+
+    a = page(40)
+    assert cells_changed(a, page(200)) > 0.9               # a new page
+    assert cells_changed(a, page(40, (70, 120))) < 0.15     # one icon-sized change
+    assert region_change(page(40, (27, 58)), a, (0.3, 0.3)) > 20   # the icon at (0.3, 0.3) is gone
+    assert region_change(a, a, (0.3, 0.3)) < 1
