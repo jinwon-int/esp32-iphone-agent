@@ -290,10 +290,14 @@ def carry_phone(tmp_path, monkeypatch, script):
     phone, device = make_phone(tmp_path, pointer="absolute")
     phone.screen = FlipScreen(script)
 
+    clock = [0.0]
+
     async def sleep(seconds):
         device.sent.append(f"sleep {seconds}")
         phone.screen.i += 1
+        clock[0] += seconds
     monkeypatch.setattr("hidagent.phone.asyncio.sleep", sleep)
+    monkeypatch.setattr("hidagent.phone._clock", lambda: clock[0])
     monkeypatch.setattr("hidagent.phone.ABS_STEP_S", 0)
     return phone, device
 
@@ -423,6 +427,25 @@ def test_carry_sees_a_turn_between_look_alike_pages(tmp_path, monkeypatch):
     last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
     left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
     assert 42 <= left_at < 51  # after the first turn settled, before the second began
+
+
+def test_carry_counts_the_settle_from_the_turn_start_not_from_its_detection(tmp_path, monkeypatch):
+    # the screen app pushed a frame about every 0.17 s; a turn between look-alike pages was seen on its 2nd frame,
+    # the 0.25 s settle was then counted from there, the first still frame (+0.35 s into the turn) was passed over
+    # and the edge was left on the next one, too late: iOS had already begun the next turn (#54, device 07:20 KST)
+    a, b = _jpeg(30), _jpeg(33)
+    push = 4  # polls (0.05 s each) per pushed frame, repeated as the same object in between
+    script = ([_jpeg(30, (0.3, 0.3))] * 3 + [a] * 37
+              + [_jpeg(42)] * push + [_jpeg(31)] * push  # index 40: the turn begins, 44: its 2nd sliding frame
+              + [_jpeg(33)] * push + [b] * push + [_jpeg(33)] * push  # 48, 52, 56: the new page holds still
+              + [_jpeg(200)] + [_jpeg(230)] * 40)  # index 60: the next turn
+    phone, device = carry_phone(tmp_path, monkeypatch, script)
+    log = _edge_log(phone, device)
+    assert asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1)) == 1
+    edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"
+    last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
+    left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
+    assert 48 <= left_at < 52  # on the first still frame: the next turn's decision comes before its frames do
 
 
 def test_a_single_jolt_at_the_edge_is_not_a_page_turn(tmp_path, monkeypatch):

@@ -66,6 +66,7 @@ LIFT_GONE = 20.0        # vision.region_change at the start slot above this once
 FLIP_POLL = 0.05        # seconds between screen checks while holding at the edge
 FLIP_SETTLE = 0.6       # seconds for the turn's animation before the item is carried on, off the edge
 FLIP_TIMEOUT = 4.0      # seconds at the edge without a page turn: give up and put the item back
+_clock = time.monotonic  # what carry() times a page turn by (tests replace it with the polls' clock)
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
 MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
 
@@ -427,11 +428,12 @@ class Phone:
             await asyncio.sleep(FLIP_POLL)
             if vision.region_change(resting, self.screen.frame, start) <= LIFT_GONE:  # still in its slot (#35)
                 raise RuntimeError("the item did not lift (is the Home Screen in edit mode, and settled?)")
-            if not await self._turn_started(self.screen.frame):
+            began = await self._turn_started(self.screen.frame)
+            if began is None:
                 await self._glide(edge, start)
                 await asyncio.sleep(rest)
                 raise RuntimeError(f"page did not turn within {FLIP_TIMEOUT} s at the screen edge")
-            await self._turn_settled()  # leaving mid-turn made iOS turn back (device 2026-10-17 23:21, #35)
+            await self._turn_settled(began)  # leaving mid-turn made iOS turn back (device 2026-10-17 23:21, #35)
             await self._glide(edge, target)
             await asyncio.sleep(max(rest, FLIP_SETTLE))
         finally:
@@ -445,41 +447,49 @@ class Phone:
         else:
             await self._move_to(self._dx(to[0]), self._dy(to[1]), rehome=False)
 
-    async def _turn_settled(self) -> None:
-        """Wait until the turn's animation is over, at most FLIP_SETTLE_MAX; the next turn follows about 0.45 s
-        later, so this returns as soon as the page holds still.
+    async def _turn_settled(self, began: float) -> None:
+        """Wait until the turn that began at ``began`` (_clock) is over, at most FLIP_SETTLE_MAX after it began; the
+        next turn follows about 0.45 s later, so this returns on the first still frame once FLIP_SETTLE_MIN is past.
 
+        Timed from the turn's start, in real time: counted from its detection (a frame later between look-alike
+        pages) and in polls (each also decodes frames), the first still frame was passed over and the edge was left
+        after iOS had begun the next turn (#54, device 2026-10-18 07:20 KST).
         Only newly pushed frames count: the screen app sends a frame when something changed, so two polls often see
         the same frame, which said "still" in the middle of the turn; leaving then made iOS turn back (#35).
         """
-        waited, prev = 0.0, self.screen.frame
-        while waited < FLIP_SETTLE_MAX:
+        prev = self.screen.frame
+        while _clock() - began < FLIP_SETTLE_MAX:
             await asyncio.sleep(FLIP_POLL)
-            waited += FLIP_POLL
             now = self.screen.frame
             if now is prev:  # no new frame yet: no evidence either way
                 continue
-            if waited >= FLIP_SETTLE_MIN and vision.page_change(prev, now) < FLIP_STILL:
+            if _clock() - began >= FLIP_SETTLE_MIN and vision.page_change(prev, now) < FLIP_STILL:
                 return
             prev = now
 
-    async def _turn_started(self, before: bytes | None) -> bool:
+    async def _turn_started(self, before: bytes | None) -> float | None:
         """Wait at the edge until a page turn has begun: most of the content differs from ``before``, or the content
-        slides on FLIP_MOTION_FRAMES newly pushed frames in a row (look-alike pages differ in few cells, #54)."""
-        waited, prev, sliding = 0.0, before, 0
+        slides on FLIP_MOTION_FRAMES newly pushed frames in a row (look-alike pages differ in few cells, #54).
+        Returns when (_clock) the turn was first seen: the first of those sliding frames, if any; None if no turn."""
+        waited, prev, sliding, slid_at = 0.0, before, 0, 0.0
         while waited < FLIP_TIMEOUT:
             await asyncio.sleep(FLIP_POLL)
             waited += FLIP_POLL
             now = self.screen.frame
             if vision.cells_changed(before, now) > FLIP_CELLS:
-                return True
+                return slid_at if sliding else _clock()
             if now is prev:  # no new frame yet
                 continue
-            sliding = sliding + 1 if vision.page_change(prev, now) > FLIP_MOTION else 0
+            if vision.page_change(prev, now) > FLIP_MOTION:
+                sliding += 1
+                if sliding == 1:
+                    slid_at = _clock()
+            else:
+                sliding = 0
             if sliding >= FLIP_MOTION_FRAMES:
-                return True
+                return slid_at
             prev = now
-        return False
+        return None
 
     async def scroll(self, x: float, y: float, lines: int) -> None:
         await self.point(x, y)
