@@ -58,6 +58,7 @@ function describeStep(s) {
     back: ["Go back", "返回"],
     wait: ["Wait for the screen", "等待画面加载"],
     hiccup: ["Hiccup — recovering", "出了点小问题，正在恢复"],
+    check: ["Checked: not done yet", "检查：还没完成"],
     done: ["Done", "完成"],
     fail: ["Gave up", "放弃了"],
     confirm: ["Stopped for you to confirm", "停下来等你确认"],

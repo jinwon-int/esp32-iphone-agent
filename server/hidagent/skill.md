@@ -122,7 +122,10 @@ curl -s -H "$H" -X POST $S/api/agent/stop          # emergency stop; releases th
 ```
 
 The last step's `action` tells how it ended: `done` (with `answer`), `fail` (with `reason`), `confirm` (it stopped
-before an irreversible step — `reason` says what is ready for the user), `stopped`, `error`. Do not start a run
+before an irreversible step — `reason` says what is ready for the user), `stopped`, `error`. Every `done` is
+double-checked against the screen by the planner model first: a `check` step (`verdict` "no", `reason`) means it
+was sent back to the actor; a final `done` carries `verified` (true, false after two send-backs, or null when the
+check gave no answer). Do not start a run
 while one is running (409). `POST /api/agent/clear` forgets the last run.
 
 ## Limits

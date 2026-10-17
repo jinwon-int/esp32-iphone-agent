@@ -770,3 +770,107 @@ def test_skill_md_matches_the_edit_mode_rule_and_keeps_its_numbering():
     assert "leave edit mode with *done*" not in flat and "empty spot of the wallpaper" in flat
     rules = [int(n) for n in re.findall(r"^(\d+)\. \*\*", skill, re.M)]
     assert rules == sorted(rules) and rules == list(range(1, len(rules) + 1))
+
+
+# --- a second look before done (#40 device run: done claimed "no edit mode" on a frame that showed it) ---------
+
+
+def _verify_agent(monkeypatch, actor_reply, verdicts):
+    """An agent whose actor always says actor_reply and whose planner (the checker) answers verdicts in order."""
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+
+    monkeypatch.setattr("hidagent.agent.vision.changed", lambda *a, **k: True)
+
+    class Screen:
+        live, frame, aspect = True, b"jpeg", 0.46
+        async def settled(self, **_):
+            return 0.3, True
+
+    class Phone:
+        taps = []
+        async def tap(self, x, y, aim=False):
+            self.taps.append((x, y))
+
+    class Actor:
+        model = "fake"
+        prompts = []
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            self.prompts.append(text)
+            return actor_reply
+
+    class Checker:
+        model = "fake-planner"
+        asked = []
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            self.asked.append((system, text))
+            answer = verdicts.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    agent = Agent(phone=Phone(), screen=Screen(), actor=Actor(), planner=Checker(), trace=Trace(None))
+    agent.task = "rename the folder 날씨 to Weather"
+    return agent, Actor, Checker, Phone
+
+
+def test_done_is_sent_back_when_the_second_look_says_no(monkeypatch):
+    import asyncio
+
+    agent, actor, checker, phone = _verify_agent(
+        monkeypatch, "THINK: renamed, normal screen\nDO: done Renamed to Weather",
+        ["NO: the Home Screen is still in edit mode (checkmark at the top right, minus badges on the dock)."])
+    assert asyncio.run(agent._step()) is False
+    step = agent.steps[-1]
+    assert step["action"] == "check" and step["verdict"] == "no" and "edit mode" in step["reason"]
+    assert step["claim"] == "Renamed to Weather" and phone.taps == []
+    system, text = checker.asked[0]
+    assert "edit mode" in system.lower() and "rename the folder 날씨 to Weather" in text and "Renamed" in text
+    asyncio.run(agent._next_actions())
+    assert "still in edit mode" in actor.prompts[-1]  # the actor learns why
+
+
+def test_done_ends_the_run_when_the_second_look_says_yes(monkeypatch):
+    import asyncio
+
+    agent, _, checker, _ = _verify_agent(monkeypatch, "THINK: ok\nDO: done Renamed", ["YES. The folder reads Weather."])
+    assert asyncio.run(agent._step()) is True
+    assert agent.steps[-1]["action"] == "done" and agent.steps[-1]["verified"] is True and len(checker.asked) == 1
+
+
+def test_a_third_done_after_two_rejections_is_taken_but_marked_unverified(monkeypatch):
+    import asyncio
+
+    agent, _, checker, _ = _verify_agent(monkeypatch, "THINK: ok\nDO: done Renamed", ["NO: menu open", "NO: menu open"])
+    assert asyncio.run(agent._step()) is False and asyncio.run(agent._step()) is False
+    assert asyncio.run(agent._step()) is True
+    assert agent.steps[-1]["action"] == "done" and agent.steps[-1]["verified"] is False and len(checker.asked) == 2
+
+
+@pytest.mark.parametrize("answer", [RuntimeError("planner down"), "I think so, mostly"])
+def test_a_failed_or_unclear_second_look_never_blocks_done(monkeypatch, answer):
+    import asyncio
+
+    agent, _, _, _ = _verify_agent(monkeypatch, "THINK: ok\nDO: done Renamed", [answer])
+    assert asyncio.run(agent._step()) is True
+    assert agent.steps[-1]["action"] == "done" and agent.steps[-1]["verified"] is None
+
+
+@pytest.mark.parametrize("reply", ["THINK: x\nDO: fail no such folder", "THINK: x\nDO: confirm Pay is next"])
+def test_fail_and_confirm_are_not_second_guessed(monkeypatch, reply):
+    import asyncio
+
+    agent, _, checker, _ = _verify_agent(monkeypatch, reply, [])
+    assert asyncio.run(agent._step()) is True and checker.asked == []
+
+
+def test_rejections_are_counted_per_run(monkeypatch):
+    import inspect
+
+    from hidagent.agent import Agent
+
+    agent, _, _, _ = _verify_agent(monkeypatch, "THINK: ok\nDO: done x", [])
+    agent._rejected = 2
+    agent._reset_run("next task")
+    assert agent._rejected == 0 and agent.task == "next task" and agent.steps == []
+    assert "self._reset_run(task)" in inspect.getsource(Agent.start)
