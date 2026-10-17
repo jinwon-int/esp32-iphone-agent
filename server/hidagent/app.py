@@ -72,22 +72,26 @@ agent = Agent(phone, screen, LLM.from_env("ACTOR"), LLM.from_env("PLANNER"),
               settle=settle_options())
 
 
+def startup_notes(port) -> list[str]:
+    """What the server logs at start-up: where each token is kept, never its value. Under systemd the log goes to
+    the journal, which others may read (adm/systemd-journal groups, backups) and which outlives any token."""
+    ui = "<your UI_TOKEN>" if UI_TOKEN_FROM_ENV else f"<the token in {DATA_DIR / 'ui_token'}>"
+    notes = [f"web UI: http://<this computer>:{port}/?token={ui}"]
+    if SCREEN_SOURCE == "push":
+        push = "your PUSH_TOKEN" if PUSH_TOKEN_FROM_ENV else f"the token in {DATA_DIR / 'push_token'}"
+        notes.append(f"screen source: push -- the app connects to ws://{screen.host}:{screen.port}/ with {push}")
+    else:
+        notes.append(f"AirPlay pin: {AIRPLAY_PIN or 'off (any phone on the network may mirror to the receiver)'}")
+    return notes
+
+
 @asynccontextmanager
 async def lifespan(_):
     if device.key is None:
         raise SystemExit("refusing to start without a valid DEVICE_KEY (see the error above)")
     server = await device.serve(os.environ.get("DEVICE_HOST", "0.0.0.0"), int(os.environ.get("DEVICE_PORT", 7300)))
-    port = os.environ.get("PORT", 8890)
-    if UI_TOKEN_FROM_ENV:  # the user chose it: no need to print it
-        log.info("web UI: http://<this computer>:%s/?token=<your UI_TOKEN>", port)
-    else:
-        log.info("web UI: http://<this computer>:%s/?token=%s  (kept in %s)", port, UI_TOKEN, DATA_DIR / "ui_token")
-    if SCREEN_SOURCE == "push":
-        where = "<your PUSH_TOKEN>" if PUSH_TOKEN_FROM_ENV else f"{screen.token}  (kept in {DATA_DIR / 'push_token'})"
-        log.info("screen source: push -- the app connects to ws://%s:%d/ with token %s",
-                 screen.host, screen.port, where)
-    else:
-        log.info("AirPlay pin: %s", AIRPLAY_PIN or "off (any phone on the network may mirror to the receiver)")
+    for note in startup_notes(os.environ.get("PORT", 8890)):
+        log.info("%s", note)
     screen.start()
     awake = asyncio.create_task(device.keep_awake(screen=screen))
     yield

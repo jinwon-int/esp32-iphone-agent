@@ -233,3 +233,20 @@ def test_longpress_and_drag_endpoints(web, monkeypatch):
     assert calls[-1] == ("long_press", 0.5, 0.3, 2.0)
     assert client.post("/api/longpress", json={"x": 0.5, "y": 0.3, "seconds": 30}).status_code == 422
     assert client.post("/api/drag", json={"x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2, "rest": 9}).status_code == 422
+
+
+def test_startup_log_names_where_the_tokens_are_kept_never_their_values(web, monkeypatch):
+    module, _ = web
+    ui, push = module.UI_TOKEN, "push-token-must-not-be-logged-0123"
+
+    class FakeScreen:
+        host, port, token = "100.64.0.1", 8891, push
+
+    monkeypatch.setattr(module, "UI_TOKEN_FROM_ENV", False)
+    monkeypatch.setattr(module, "PUSH_TOKEN_FROM_ENV", False)
+    monkeypatch.setattr(module, "SCREEN_SOURCE", "push")
+    monkeypatch.setattr(module, "screen", FakeScreen())
+    text = "\n".join(module.startup_notes(8890))
+    assert ui not in text and push not in text
+    assert str(module.DATA_DIR / "ui_token") in text and str(module.DATA_DIR / "push_token") in text
+    assert "ws://100.64.0.1:8891/" in text

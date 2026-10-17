@@ -111,8 +111,8 @@ cp .env.example .env         # 填 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY 和 DE
 set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 ```
 
-服务端启动时会打印 `web UI: http://<this computer>:8890/?token=…` 和 `AirPlay pin: nnnn`。用浏览器打开这个带 token
-的地址一次，浏览器会记住 token 30 天。AirPlay 配对码需要 UxPlay 1.68 或更新版本。
+服务端启动时会打印 `web UI: http://<this computer>:8890/?token=…` 和 `AirPlay pin: nnnn`。token 本身不会写进日志（日志可能进入系统 journal），请用
+`cat ~/.hidagent/ui_token` 查看。用浏览器打开这个带 token 的地址一次，浏览器会记住 token 30 天。AirPlay 配对码需要 UxPlay 1.68 或更新版本。
 
 ### 3. 设置手机（只需一次）
 
