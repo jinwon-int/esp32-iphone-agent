@@ -39,7 +39,9 @@ Give several DO lines (up to 6, run in order) whenever the next actions do not d
 result: e.g. ticking several visible checkboxes or days, several drawing strokes, clearing a field then typing.
 Give ONE DO line when the next action depends on what this one opens or changes.
 A type action always ends the reply (anything after it is not run): read the typed text on the next screenshot
-before pressing enter. done is always alone in its reply, after a screenshot that shows the result.
+before pressing enter. done is always alone in its reply, after a screenshot that shows the result. A second
+look checks every done against the screen; a "check" with verdict "no" in your recent actions names what is
+still wrong: fix that, then say done again.
 The screenshot is always the current screen: never assume it is outdated. If it does not show the goal reached,
 the goal is not reached yet.
 Never tap or long press the Dynamic Island or the status bar at the very top (the top 6 % of the screenshot):
@@ -108,6 +110,15 @@ Actions:
 Example:
 THINK: My last tap opened the home screen as intended. The App Store icon is visible, so I tap it.
 DO: tap 152 362"""
+
+CHECK_PROMPT = """You double-check an iPhone agent that says it reached its goal. You see the phone's screen now.
+Judge only from this screenshot, never from the agent's claim. First line: YES or NO. Then one short sentence.
+Say NO when the screenshot does not visibly show the goal reached, or when something is left open that the goal
+did not ask for: Home Screen edit mode (a checkmark button at the top right, a brush button at the top left,
+minus badges on icons; the icons may wiggle), an open folder, an item's menu, a dialog or alert, or a text field
+still being edited. Name what is wrong so the agent can fix it."""
+
+MAX_REJECTED = 2  # done is sent back at most this often per run; the next done is taken, marked unverified
 
 META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed", "settle_s", "stable",
         "ocr_s", "gate")  # not the action
@@ -235,6 +246,7 @@ class Agent:
         self.shots: dict[int, bytes] = {}  # step index -> screenshot the model decided on
         self._pointer = (0.0, 0.0)  # last pointer position (screen fractions)
         self._acted_at: float | None = None  # when the last action began: the settle waits for a frame after it
+        self._rejected = 0  # done claims the second look sent back in this run
         self._job: asyncio.Task | None = None
 
     @property
@@ -246,13 +258,17 @@ class Agent:
             raise RuntimeError("agent already running")
         if not self.screen.live:
             raise RuntimeError("no phone screen: start Screen Mirroring first")
-        self.task, self.plan, self.steps, self.shots = task, "", [], {}
-        self._pointer = (0.0, 0.0)
+        self._reset_run(task)
         self._run_id += 1
         if self.gate:
             self.gate.new_session()
         self.trace.start(task)
         self._job = asyncio.create_task(self._run())
+
+    def _reset_run(self, task: str) -> None:
+        self.task, self.plan, self.steps, self.shots = task, "", [], {}
+        self._pointer = (0.0, 0.0)
+        self._rejected = 0
 
     def stop(self) -> None:
         if self.running:
@@ -332,6 +348,11 @@ class Agent:
                 act["act_s"] = round(time.time() - started, 2)
                 spots += _pointer_path(act, getattr(getattr(self.phone, "home", None), "path", None))
                 self._pointer = spots[-1]
+            if name == "done":
+                before = self._rejected
+                act["verified"] = await self._second_look(act)
+                if self._rejected > before:  # a fresh "no": back to the actor, the reason is in its history
+                    return False
             self._record(act.pop("_shot"), **act)
             if check:
                 self._attach(check, len(self.steps) - 1)
@@ -348,6 +369,34 @@ class Agent:
         await self._settle()
         # feedback for the next round
         self.steps[-1]["changed"] = vision.changed(seen, self.screen.frame, ignore=tuple(spots))
+        return False
+
+    async def _second_look(self, act: dict) -> bool | None:
+        """Ask the planner whether the screen really shows the goal reached (#40: done on an edit-mode frame).
+
+        True: confirmed. False: it says no -- recorded as a "check" step and sent back while fewer than
+        MAX_REJECTED were; after that the done is taken but stays False. None: no answer (error or unclear);
+        the done is taken, never blocked by the check itself.
+        """
+        if self._rejected >= MAX_REJECTED:
+            return False
+        try:
+            reply, seconds, frame = await self._ask(
+                "checker", self.planner, CHECK_PROMPT, f"Goal: {self.task}\n\nThe agent says: {act.get('answer', '')}")
+        except BlindError:
+            raise
+        except Exception as e:  # noqa: BLE001 - the check must never cost a finished run
+            log.warning("second look skipped: %s", str(e)[:120])
+            return None
+        m = re.match(r"\s*\**\s*(yes|no)\b[\s:.,*-]*(.*)", reply, re.I | re.S)
+        if not m:
+            log.warning("second look unclear: %s", reply[:120])
+            return None
+        if m.group(1).lower() == "yes":
+            return True
+        self._rejected += 1
+        self._record(frame, action="check", claim=act.get("answer", ""), verdict="no",
+                     reason=" ".join(m.group(2).split())[:300], think_s=seconds)
         return False
 
     async def _settle(self) -> None:
