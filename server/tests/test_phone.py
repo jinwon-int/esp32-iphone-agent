@@ -281,6 +281,11 @@ class FlipScreen:
         return self.script[min(self.i, len(self.script) - 1)]
 
 
+def fresh(frame, n):
+    """n newly pushed copies of a frame (new objects, as the screen app sends them)."""
+    return [bytes(bytearray(frame)) for _ in range(n)]
+
+
 def carry_phone(tmp_path, monkeypatch, script):
     phone, device = make_phone(tmp_path, pointer="absolute")
     phone.screen = FlipScreen(script)
@@ -296,7 +301,7 @@ def carry_phone(tmp_path, monkeypatch, script):
 def test_carry_leaves_the_edge_as_soon_as_the_page_starts_to_turn(tmp_path, monkeypatch):
     # held on, iOS turns page after page with no still moment between (device frames 2026-10-17): leave at the first
     p1, p2, p3 = _jpeg(30), _jpeg(130), _jpeg(230)
-    script = [_jpeg(30, (0.85, 0.13))] * 3 + [p1] * 37 + [_jpeg(80)] + [p2] * 8 + [_jpeg(170)] + [p3] * 40
+    script = [_jpeg(30, (0.85, 0.13))] * 3 + [p1] * 37 + [_jpeg(80)] + fresh(p2, 8) + [_jpeg(170)] + [p3] * 40
     phone, device = carry_phone(tmp_path, monkeypatch, script)
     assert asyncio.run(phone.carry((0.85, 0.13), (0.5, 0.6), pages=1, pick=0.5, lift=0.6, rest=1.0)) == 1
     assert device.sent[-2:] == ["sleep 1.0", "release"]
@@ -359,7 +364,7 @@ def test_a_folder_forming_is_not_a_page_turn(tmp_path, monkeypatch):
 def test_carry_waits_for_the_turn_to_settle_before_leaving_the_edge(tmp_path, monkeypatch):
     # leaving mid-turn made iOS turn back to the first page (device 2026-10-17 23:21)
     p1, p2 = _jpeg(30), _jpeg(200)
-    script = [_jpeg(30, (0.3, 0.3))] * 3 + [p1] * 37 + [_jpeg(90), _jpeg(140), _jpeg(180)] + [p2] * 60
+    script = [_jpeg(30, (0.3, 0.3))] * 3 + [p1] * 37 + [_jpeg(90), _jpeg(140), _jpeg(180)] + fresh(p2, 60)
     phone, device = carry_phone(tmp_path, monkeypatch, script)
     edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"
     log = []
@@ -373,3 +378,22 @@ def test_carry_waits_for_the_turn_to_settle_before_leaving_the_edge(tmp_path, mo
     last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
     left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
     assert left_at >= 43  # left the edge only once the turn's frames (40-42) were over
+
+
+def test_carry_does_not_take_a_repeated_frame_for_a_settled_turn(tmp_path, monkeypatch):
+    # the same frame polled twice (no new push yet) said "still" mid-turn; iOS then turned back (#35, 23:33 KST)
+    p1, mid, p2 = _jpeg(30), _jpeg(120), _jpeg(200)
+    script = [_jpeg(30, (0.3, 0.3))] * 3 + [p1] * 37 + [mid] * 6 + fresh(p2, 40)  # the turn's frame repeats 6 polls
+    phone, device = carry_phone(tmp_path, monkeypatch, script)
+    edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"
+    log = []
+    real_send = device.send
+
+    async def send(command):
+        log.append((command, phone.screen.i))
+        await real_send(command)
+    device.send = send
+    asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1))
+    last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
+    left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
+    assert left_at >= 46  # not while the turn's frame was merely repeated (indices 40-45)
