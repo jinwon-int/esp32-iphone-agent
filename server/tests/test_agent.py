@@ -874,3 +874,30 @@ def test_rejections_are_counted_per_run(monkeypatch):
     agent._reset_run("next task")
     assert agent._rejected == 0 and agent.task == "next task" and agent.steps == []
     assert "self._reset_run(task)" in inspect.getsource(Agent.start)
+
+
+def test_tapping_the_same_app_again_after_home_is_not_sent_back(monkeypatch):
+    # #44: Settings -> wrong row -> home -> Settings again was refused as a repeat and the run failed
+    import asyncio
+
+    settings = {"action": "tap", "x": 617, "y": 247, "changed": True}
+    row = {"action": "tap", "x": 405, "y": 587, "changed": True}
+    home = {"action": "home", "changed": True}
+    agent, prompts = _pixel_agent(monkeypatch, ["THINK: open Settings\nDO: tap 364 316"],
+                                  [settings, row, home, settings, row, home])
+    acts = asyncio.run(agent._next_actions())
+    assert (acts[0]["x"], acts[0]["y"]) == (617, 247) and "twice" not in prompts[-1]
+
+
+def test_a_tap_is_sent_back_only_on_its_fourth_try_without_home(monkeypatch):
+    import asyncio
+
+    same = {"action": "tap", "x": 383, "y": 132, "changed": True}
+    close = {"action": "tap", "x": 500, "y": 600, "changed": True}
+    agent, prompts = _pixel_agent(monkeypatch, ["THINK: again\nDO: tap 226 169"], [same, close, same, close])
+    asyncio.run(agent._next_actions())
+    assert "twice" not in prompts[-1]  # a third tap is still allowed
+    agent, prompts = _pixel_agent(monkeypatch, ["THINK: again\nDO: tap 226 169", "THINK: other\nDO: tap 100 100"],
+                                  [same, close, same, close, same])
+    acts = asyncio.run(agent._next_actions())
+    assert "3 times" in prompts[-1] and (acts[0]["x"], acts[0]["y"]) != (383, 132)

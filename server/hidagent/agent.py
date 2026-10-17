@@ -434,17 +434,28 @@ class Agent:
         """The previous round changed nothing on screen, so a tap may have landed off target."""
         return bool(self.steps) and self.steps[-1].get("changed") is False
 
-    def _tried_twice(self, act: dict, window: int = 6) -> bool:
-        """True when this tap or long press, at the same spot, is already twice among the last window moves.
+    def _repeats(self, act: dict, window: int = 6) -> int:
+        """How often this tap or long press, at the same spot, already came since the last home/back (within window).
 
         Catches "miss -> close the wrong menu -> the same miss" loops, which the last-action checks never see
-        because the screen did change each time. A goal that really needs the same tap again can batch it.
+        because the screen did change each time (#39). Counting restarts at home/back: "open the app -> home ->
+        open the same app" is normal navigation, not a loop (#44). 0 for any other action.
         """
         if act["action"] not in ("tap", "longpress"):
-            return False
+            return 0
+        moves = [s for s in self.steps if "plan" not in s]
+        for i in range(len(moves) - 1, -1, -1):
+            if moves[i].get("action") in ("home", "back"):
+                moves = moves[i + 1:]
+                break
         spot = (act["action"], act.get("x"), act.get("y"))
-        moves = [s for s in self.steps if "plan" not in s][-window:]
-        return sum((m.get("action"), m.get("x"), m.get("y")) == spot for m in moves) >= 2
+        return sum((m.get("action"), m.get("x"), m.get("y")) == spot for m in moves[-window:])
+
+    def _too_repeated(self, act: dict) -> int:
+        """The repeat count when it is one too many, else 0: a long press may come twice (a wrong item's menu is the
+        risk), a tap three times (re-tapping a button that did not react yet is common)."""
+        n = self._repeats(act)
+        return n if n >= (2 if act["action"] == "longpress" else 3) else 0
 
     def _repeating(self, act: dict, limit: int = 3) -> bool:
         """True when the actor picks the same action as its last limit-1 moves and the last one did nothing.
@@ -508,11 +519,12 @@ class Agent:
                 prompt += (f"\n\nYou just proposed {_as_line(acts[0], size)} again, but it changed nothing last "
                            "time. Choose a different action (another position, a shorter swipe, or another way).")
                 continue
-            if self._tried_twice(acts[0]):  # e.g. a long press that keeps opening the wrong item's menu (#38 re-test)
-                log.info("actor proposed the same tap or long press a third time; asking for another")
-                prompt += (f"\n\nYou already did {_as_line(acts[0], size)} twice in your recent actions and the goal "
-                           "is still not reached. Measure the target's position on this screenshot again (in pixels) "
-                           "and choose another position or another way.")
+            if n := self._too_repeated(acts[0]):  # e.g. a long press that keeps opening the wrong item's menu
+                log.info("actor proposed the same tap or long press again (%d before); asking for another", n)
+                times = "twice" if n == 2 else f"{n} times"
+                prompt += (f"\n\nYou already did {_as_line(acts[0], size)} {times} in your recent actions and the "
+                           "goal is still not reached. Measure the target's position on this screenshot again (in "
+                           "pixels) and choose another position or another way.")
                 continue
             acts[0]["think_s"] = seconds
             if ocr_s is not None:
