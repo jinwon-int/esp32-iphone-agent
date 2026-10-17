@@ -55,6 +55,7 @@ CARRY_Y = 0.80          # ... at this height: below the last icon row's labels, 
 FLIP_CELLS = 0.5        # vision.cells_changed against the page before above this: the page is turning (a turn
                         # 0.54-0.88; a folder forming or an icon lifting/dropping 0.04-0.33; device frames 2026-10-17)
 FLIP_STILL = 6.0        # vision.page_change between two polls below this: the turn's animation is over
+FLIP_SETTLE_MIN = 0.25  # seconds after the turn began before it may count as over (the animation)
 FLIP_SETTLE_MAX = 1.0   # seconds to wait for that before leaving the edge anyway
 LIFT_GONE = 20.0        # vision.region_change at the start slot above this once at the edge: the item was lifted
 FLIP_POLL = 0.05        # seconds between screen checks while holding at the edge
@@ -440,14 +441,20 @@ class Phone:
             await self._move_to(self._dx(to[0]), self._dy(to[1]), rehome=False)
 
     async def _turn_settled(self) -> None:
-        """Wait until the turn's animation is over (two polls alike), at most FLIP_SETTLE_MAX; the next turn follows
-        about 0.45 s later, so this returns as soon as the page holds still."""
+        """Wait until the turn's animation is over, at most FLIP_SETTLE_MAX; the next turn follows about 0.45 s
+        later, so this returns as soon as the page holds still.
+
+        Only newly pushed frames count: the screen app sends a frame when something changed, so two polls often see
+        the same frame, which said "still" in the middle of the turn; leaving then made iOS turn back (#35).
+        """
         waited, prev = 0.0, self.screen.frame
         while waited < FLIP_SETTLE_MAX:
             await asyncio.sleep(FLIP_POLL)
             waited += FLIP_POLL
             now = self.screen.frame
-            if vision.page_change(prev, now) < FLIP_STILL:
+            if now is prev:  # no new frame yet: no evidence either way
+                continue
+            if waited >= FLIP_SETTLE_MIN and vision.page_change(prev, now) < FLIP_STILL:
                 return
             prev = now
 
