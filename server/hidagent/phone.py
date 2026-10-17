@@ -50,7 +50,8 @@ ABS_WAKE_S = 0.3        # after such a pause: report the target once, wait this 
 LIFT_DIST = 0.03        # screen fraction of a drag's first stretch that ``lift`` slows down, so iOS lifts the item
 LIFT_STEPS = 6          # reports (absolute) or moves (relative) over that stretch
 EDGE_X = (0.015, 0.985) # where carry() holds an item so iOS turns the page (left, right)
-CARRY_Y = 0.62          # ... at this height: below the top rows, above the page dots
+CARRY_Y = 0.80          # ... at this height: below the last icon row's labels, above the page dots, so the held
+                        # item never rests beside an icon (at 0.62 it sat next to column 4 and made a folder, #35)
 FLIP_CHANGE = 15.0      # vision.page_change against the page before above this: the page is turning (a turn scores
                         # 20-45, edit mode's wiggle 2-3, the held icon moving 4-10; device frames 2026-10-17)
 FLIP_POLL = 0.05        # seconds between screen checks while holding at the edge

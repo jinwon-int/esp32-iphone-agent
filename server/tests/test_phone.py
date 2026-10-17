@@ -297,7 +297,7 @@ def test_carry_leaves_the_edge_as_soon_as_the_page_starts_to_turn(tmp_path, monk
     assert device.sent[-2:] == ["sleep 1.0", "release"]
     polls = device.sent.count("sleep 0.05")  # FLIP_POLL checks at the edge
     assert 10 < polls < 25  # waited for the first turn's frames (index 40), left before the second (index 49)
-    edge = f"at {round(0.985 * ABS_MAX)} {round(0.62 * ABS_MAX)}"
+    edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"  # the empty band, beside no icon
     last_edge = max(i for i, c in enumerate(device.sent) if c == edge)
     after = [c for c in device.sent[last_edge + 1:] if c.startswith("at ")]
     assert after == [f"at {round(0.5 * ABS_MAX)} {round(0.6 * ABS_MAX)}"]  # one jump off the edge, no glide (#35)
