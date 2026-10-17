@@ -745,3 +745,28 @@ def test_actor_prompt_asks_for_pixel_positions():
 
     text = " ".join(ACTOR_PROMPT.split()).lower()
     assert "pixels on the screenshot" in text and "0-1000" not in text
+
+
+def test_actor_leaves_edit_mode_on_the_wallpaper_and_checks_for_it_before_done():
+    # #39 device runs: both renames ended in edit mode while done said "back to normal, no ✓ button"; and the
+    # "keep off the top 6 %" rule (#38) covers the ✓ (Done) button that the prompt told the actor to tap
+    from hidagent.agent import ACTOR_PROMPT
+
+    text = " ".join(ACTOR_PROMPT.split()).lower()
+    assert "to leave edit mode, tap done" not in text
+    assert "tap an empty spot of the wallpaper" in text
+    assert "checkmark" in text and "brush" in text and "minus badges" in text
+    assert "before done" in text and "edit mode" in text.split("before done")[1][:200]
+
+
+def test_skill_md_matches_the_edit_mode_rule_and_keeps_its_numbering():
+    import re
+    from pathlib import Path
+
+    import hidagent
+
+    skill = (Path(hidagent.__file__).parent / "skill.md").read_text()
+    flat = " ".join(skill.split()).lower()
+    assert "leave edit mode with *done*" not in flat and "empty spot of the wallpaper" in flat
+    rules = [int(n) for n in re.findall(r"^(\d+)\. \*\*", skill, re.M)]
+    assert rules == sorted(rules) and rules == list(range(1, len(rules) + 1))
