@@ -274,3 +274,27 @@ def test_drag_endpoint_passes_via_points_and_lift(web, monkeypatch):
     assert calls == [([(0.85, 0.14), (0.985, 0.45), (0.5, 0.6)], 0.9, 1.0, [2.5], 0.6)]
     assert client.post("/api/drag", json={"x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2,
                                           "via": [{"x": 0.9, "y": 0.5, "rest": 9}]}).status_code == 422
+
+
+def test_carry_endpoint(web, monkeypatch):
+    module, client = web
+    calls = []
+
+    class FakeScreen:
+        live, aspect, frame = True, 90 / 195, None
+
+        async def settled(self, **_):
+            return 0.3, True
+
+    class FakePhone:
+        async def carry(self, start, target, pages, pick=0.5, lift=0.6, rest=1.0):
+            calls.append((start, target, pages, pick, lift, rest))
+            return abs(pages)
+
+    monkeypatch.setattr(module, "screen", FakeScreen())
+    monkeypatch.setattr(module, "phone", FakePhone())
+    r = client.post("/api/carry", json={"x1": 0.85, "y1": 0.13, "x2": 0.5, "y2": 0.6, "pages": -1})
+    assert r.status_code == 200 and r.json()["pages_turned"] == 1
+    assert calls == [((0.85, 0.13), (0.5, 0.6), -1, 0.5, 0.6, 1.0)]
+    assert client.post("/api/carry", json={"x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2, "pages": 0}).status_code == 422
+    assert client.post("/api/carry", json={"x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2, "pages": 2}).status_code == 422

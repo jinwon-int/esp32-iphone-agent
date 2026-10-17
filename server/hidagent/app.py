@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from . import auth, bench, vision
 from .agent import Agent, settle_options
@@ -184,6 +184,20 @@ class Drag(Swipe):
     via: list[Via] = Field(default_factory=list, max_length=4)  # points passed on the way, each with a rest
 
 
+class Carry(Swipe):
+    pages: int = Field(ge=-1, le=1)           # 1: to the next page (right), -1: the previous one (left)
+    pick: float = Field(0.5, ge=0, le=3)
+    lift: float = Field(0.6, ge=0, le=2)
+    rest: float = Field(DROP, ge=0, le=3)
+
+    @field_validator("pages")
+    @classmethod
+    def _some_pages(cls, v: int) -> int:
+        if not v:
+            raise ValueError("pages must be non-zero")
+        return v
+
+
 class Text(BaseModel):
     text: str
 
@@ -285,6 +299,19 @@ async def drag(d: Drag):
     if d.lift:
         extra["lift"] = d.lift
     return await act(phone.drag(points, pick=d.pick, rest=d.rest, aim=True, **extra), *points)
+
+
+@app.post("/api/carry")
+async def carry(c: Carry):
+    """Move a Home Screen item (edit mode) to the next (1) or previous (-1) page and drop it at 2 there; the page
+    turn is watched on the live screen. 409 when the page does not turn (the item is put back where it was)."""
+    turned = None
+
+    async def go():
+        nonlocal turned
+        turned = await phone.carry((c.x1, c.y1), (c.x2, c.y2), c.pages, pick=c.pick, lift=c.lift, rest=c.rest)
+
+    return {**await act(go(), (c.x1, c.y1), (c.x2, c.y2)), "pages_turned": turned}
 
 
 @app.post("/api/scroll")

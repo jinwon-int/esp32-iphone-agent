@@ -78,3 +78,22 @@ def test_pointer_far_from_the_target_is_found_with_a_full_screen_search():
 def test_pointer_search_off_the_screen_finds_nothing_instead_of_failing(near):
     """#17-C: an off-screen target made PIL's crop raise "Coordinate 'lower' is less than 'upper'"."""
     assert pointer(screen((262, 856)), screen((274, 856)), near=near, shift=12 / W) is None
+
+
+def _solid(value, size=(90, 195)):
+    import io
+
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", size, (value, value, value)).save(out, "JPEG")
+    return out.getvalue()
+
+
+def test_page_change_is_zero_for_the_same_page_and_large_for_another():
+    from hidagent.vision import page_change
+
+    a, b = _solid(40), _solid(200)
+    assert page_change(a, a) < 1
+    assert page_change(a, b) > 100
+    assert page_change(None, a) == 0 and page_change(a, None) == 0  # no frame: no evidence of a turn

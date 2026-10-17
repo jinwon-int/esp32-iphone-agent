@@ -49,6 +49,13 @@ ABS_WAKE_S = 0.3        # after such a pause: report the target once, wait this 
                         # report only woke the pointer, so a tap clicked at the old spot and a swipe became a hold)
 LIFT_DIST = 0.03        # screen fraction of a drag's first stretch that ``lift`` slows down, so iOS lifts the item
 LIFT_STEPS = 6          # reports (absolute) or moves (relative) over that stretch
+EDGE_X = (0.015, 0.985) # where carry() holds an item so iOS turns the page (left, right)
+CARRY_Y = 0.62          # ... at this height: below the top rows, above the page dots
+FLIP_CHANGE = 15.0      # vision.page_change against the page before above this: the page is turning (a turn scores
+                        # 20-45, edit mode's wiggle 2-3, the held icon moving 4-10; device frames 2026-10-17)
+FLIP_POLL = 0.1         # seconds between screen checks while holding at the edge
+FLIP_SETTLE = 0.6       # seconds for the turn's animation before the item is carried on, off the edge
+FLIP_TIMEOUT = 4.0      # seconds at the edge without a page turn: give up and put the item back
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
 MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
 
@@ -339,28 +346,10 @@ class Phone:
             if pick:
                 await asyncio.sleep(pick)
             last = points[0]
-            if lift and len(points) > 1:  # the first few hundredths of the way, slowly
-                (x0, y0), (x1, y1) = points[0], points[1]
-                d = math.dist((x0, y0), (x1, y1))
-                if d:
-                    k = min(LIFT_DIST, d) / d
-                    for i in range(1, LIFT_STEPS + 1):
-                        x, y = x0 + (x1 - x0) * k * i / LIFT_STEPS, y0 + (y1 - y0) * k * i / LIFT_STEPS
-                        if self.absolute:
-                            await self._at(x, y)
-                        else:
-                            await self._move_to(self._dx(x), self._dy(y), rehome=False)
-                        await asyncio.sleep(lift / LIFT_STEPS)
-                    last = (x, y)
+            if lift and len(points) > 1:
+                last = await self._lift(points[0], points[1], lift)
             for n_point, (x, y) in enumerate(points[1:]):
-                if self.absolute:  # glide there in small steps: one jump would be a teleport, not a swipe
-                    n = max(1, math.ceil(math.dist(last, (x, y)) / ABS_STEP - 1e-9))  # 0.3 / 0.03 is 10.000…02
-                    for i in range(1, n + 1):
-                        await self._at(last[0] + (x - last[0]) * i / n, last[1] + (y - last[1]) * i / n)
-                        await asyncio.sleep(ABS_STEP_S)
-                    last = (x, y)
-                else:
-                    await self._move_to(self._dx(x), self._dy(y), rehome=False)  # never home mid-drag
+                last = await self._glide(last, (x, y))
                 if stops and n_point < len(stops) and stops[n_point]:
                     await asyncio.sleep(stops[n_point])
             pause = rest if rest is not None else (HOLD if hold else 0)
@@ -368,6 +357,81 @@ class Phone:
                 await asyncio.sleep(pause)
         finally:
             await self.device.send("release")
+
+    async def _lift(self, start: tuple[float, float], toward: tuple[float, float],
+                    seconds: float) -> tuple[float, float]:
+        """Cover the first LIFT_DIST of the way slowly (button already down); returns where the pointer is."""
+        (x0, y0), (x1, y1) = start, toward
+        d = math.dist(start, toward)
+        if not d:
+            return start
+        k = min(LIFT_DIST, d) / d
+        x, y = start
+        for i in range(1, LIFT_STEPS + 1):
+            x, y = x0 + (x1 - x0) * k * i / LIFT_STEPS, y0 + (y1 - y0) * k * i / LIFT_STEPS
+            if self.absolute:
+                await self._at(x, y)
+            else:
+                await self._move_to(self._dx(x), self._dy(y), rehome=False)
+            await asyncio.sleep(seconds / LIFT_STEPS)
+        return x, y
+
+    async def _glide(self, last: tuple[float, float], to: tuple[float, float]) -> tuple[float, float]:
+        """Move with the button down: small absolute steps (one jump would be a teleport, not a finger), or one
+        relative move (never re-homing mid-gesture)."""
+        x, y = to
+        if self.absolute:
+            n = max(1, math.ceil(math.dist(last, to) / ABS_STEP - 1e-9))  # 0.3 / 0.03 is 10.000…02
+            for i in range(1, n + 1):
+                await self._at(last[0] + (x - last[0]) * i / n, last[1] + (y - last[1]) * i / n)
+                await asyncio.sleep(ABS_STEP_S)
+        else:
+            await self._move_to(self._dx(x), self._dy(y), rehome=False)
+        return to
+
+    async def carry(self, start: tuple[float, float], target: tuple[float, float], pages: int,
+                    pick: float = 0.5, lift: float = 0.6, rest: float = DROP) -> int:
+        """Move a Home Screen item to the next page (``pages`` = 1, right) or the previous one (-1, left), dropping it
+        on ``target`` there. Edit mode only.
+
+        Picks the item up (``pick`` + slow ``lift``), holds it at the screen edge and watches the live screen: as soon
+        as the page starts to turn (vision.page_change above FLIP_CHANGE) it leaves the edge, so exactly one page
+        turns. Timing the hold instead turned one to three pages for the same wait (#35); while held on, iOS turns
+        page after page with no still moment between them, so only the first turn can be told apart reliably.
+        For two pages, carry twice with an empty spot on the page between. Returns 1. When the page does not turn
+        within FLIP_TIMEOUT, the item is carried back to ``start`` and let go there, and RuntimeError is raised.
+        """
+        if pages not in (1, -1):
+            raise ValueError("pages must be 1 (next page, right) or -1 (previous page, left)")
+        if self.screen is None or not self.screen.live:
+            raise RuntimeError("carrying across pages needs the live screen to see the page turn")
+        edge = (EDGE_X[1] if pages > 0 else EDGE_X[0], CARRY_Y)
+        await self.point(*start)
+        await self.device.send("press")
+        try:
+            if pick:
+                await asyncio.sleep(pick)
+            last = await self._lift(start, edge, lift) if lift else start
+            await self._glide(last, edge)
+            if not await self._turn_started(self.screen.frame):
+                await self._glide(edge, start)
+                await asyncio.sleep(rest)
+                raise RuntimeError(f"page did not turn within {FLIP_TIMEOUT} s at the screen edge")
+            await self._glide(edge, target)  # off the edge at once: no second page turn
+            await asyncio.sleep(max(rest, FLIP_SETTLE))
+        finally:
+            await self.device.send("release")
+        return 1
+
+    async def _turn_started(self, before: bytes | None) -> bool:
+        """Wait at the edge until the screen content moves away from ``before`` (a page turn has begun)."""
+        waited = 0.0
+        while waited < FLIP_TIMEOUT:
+            await asyncio.sleep(FLIP_POLL)
+            waited += FLIP_POLL
+            if vision.page_change(before, self.screen.frame) > FLIP_CHANGE:
+                return True
+        return False
 
     async def scroll(self, x: float, y: float, lines: int) -> None:
         await self.point(x, y)
