@@ -123,8 +123,9 @@ cp .env.example .env         # set LLM_BASE_URL / LLM_MODEL / LLM_API_KEY and DE
 set -a && . ./.env && set +a && .venv/bin/python -m hidagent
 ```
 
-The server prints `web UI: http://<this computer>:8890/?token=…` and `AirPlay pin: nnnn`. Open that address (with the
-token) once in your browser; it remembers the token for 30 days. UxPlay 1.68 or newer is needed for the AirPlay pin.
+The server prints `web UI: http://<this computer>:8890/?token=…` and `AirPlay pin: nnnn`. The token itself is never
+logged (the log may end up in the system journal): read it with `cat ~/.hidagent/ui_token`. Open that address (with
+the token) once in your browser; it remembers the token for 30 days. UxPlay 1.68 or newer is needed for the AirPlay pin.
 
 ### 3. Set up the phone (once)
 
@@ -343,7 +344,7 @@ times a second and sends them to the server over one WebSocket on the server's V
 web UI work exactly as with AirPlay.
 
 - Set `SCREEN_SOURCE=push`, `PUSH_HOST=<this computer's VPN address>` (a wildcard is refused: the listener must not
-  face the LAN or the internet) and start the server. It prints the push token (also kept in `~/.hidagent/push_token`).
+  face the LAN or the internet) and start the server. The push token is kept in `~/.hidagent/push_token` (never logged): `cat` it there.
 - In the app, enter `ws://<PUSH_HOST>:8891/` and the token, then start the broadcast from Control Center or the app.
 - Protocol, for another client: HTTP upgrade to WebSocket with `Authorization: Bearer <PUSH_TOKEN>` (never put the
   token in the URL), then one binary message per JPEG, portrait, at most 1 MB and 15 per second. While the screen is
