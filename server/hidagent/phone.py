@@ -44,6 +44,11 @@ ABS_STEP = 0.03         # screen fraction per absolute report while dragging, so
 ABS_STEP_S = 0.008      # seconds between those reports (the relative mouse's pace, STEP_MS on the board)
 ABS_NUDGE = 0.025       # screen fraction the absolute pointer is nudged by to find it on screen
 ABS_TAP_SETTLE = 0.03   # seconds the absolute pointer rests on the target before pressing, so iOS sees it arrive
+ABS_WAKE_AFTER = 2.0    # seconds without a pointer report after which iOS may have hidden the pointer
+ABS_WAKE_S = 0.3        # after such a pause: report the target once, wait this long, then act (#35: the first
+                        # report only woke the pointer, so a tap clicked at the old spot and a swipe became a hold)
+LIFT_DIST = 0.03        # screen fraction of a drag's first stretch that ``lift`` slows down, so iOS lifts the item
+LIFT_STEPS = 6          # reports (absolute) or moves (relative) over that stretch
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
 MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
 
@@ -109,6 +114,7 @@ class Phone:
         self.device, self._file, self.screen = device, calibration_file, screen
         self.home = home or HomeVia()
         self.absolute = pointer == "absolute"
+        self._reported = time.monotonic()  # last absolute pointer report (ABS_WAKE_AFTER)
         # mouse units needed to cross the full screen width / height
         saved = json.loads(calibration_file.read_text()) if calibration_file.exists() else None
         self.span = {"w": saved["w"], "h": saved["h"]} if saved else None
@@ -269,7 +275,11 @@ class Phone:
 
     async def _at(self, x: float, y: float) -> None:
         ax, ay = (round(min(max(t, 0), 1) * ABS_MAX) for t in (x, y))
+        if time.monotonic() - self._reported > ABS_WAKE_AFTER:  # wake the pointer first, then report for real
+            await self.device.send(f"at {ax} {ay}")
+            await asyncio.sleep(ABS_WAKE_S)
         await self.device.send(f"at {ax} {ay}")
+        self._reported = time.monotonic()
 
     async def reset(self) -> None:
         """Let go of the button and re-home the pointer, whatever state a gesture left."""
@@ -306,7 +316,8 @@ class Phone:
         await self.drag([(x1, y1), (x2, y2)], hold)
 
     async def drag(self, points: list[tuple[float, float]], hold: bool = True, pick: float = 0.0,
-                   rest: float | None = None, aim: bool = False) -> None:
+                   rest: float | None = None, aim: bool = False, stops: list[float] | None = None,
+                   lift: float = 0.0) -> None:
         """Press at the first point, move through the rest, release: one continuous stroke.
 
         hold=True rests at the end first, so lists and pickers stop exactly there instead of flinging on.
@@ -315,22 +326,43 @@ class Phone:
         ``pick`` (seconds to hold still after pressing, so iOS lifts the item) and ``rest`` (seconds to stay on the
         target before letting go; an icon resting on another makes a folder). aim=True locates the pointer on
         the first point before pressing, so the right item is picked up.
+        ``stops``: seconds to rest at each point between the first and the last (one per via point), e.g. at the
+        screen edge until iOS turns the page while an icon is held. ``lift``: seconds over which the first
+        LIFT_DIST of the way is covered slowly, right after ``pick`` (iOS 27 kept the item's menu open when the
+        pointer raced off at once, #35).
         """
+        if stops is not None and len(stops) != len(points) - 2:
+            raise ValueError(f"stops needs one rest per via point: {len(points) - 2}, got {len(stops)}")
         await self.point(*points[0], aim=aim)
         await self.device.send("press")
         try:
             if pick:
                 await asyncio.sleep(pick)
             last = points[0]
-            for x, y in points[1:]:
+            if lift and len(points) > 1:  # the first few hundredths of the way, slowly
+                (x0, y0), (x1, y1) = points[0], points[1]
+                d = math.dist((x0, y0), (x1, y1))
+                if d:
+                    k = min(LIFT_DIST, d) / d
+                    for i in range(1, LIFT_STEPS + 1):
+                        x, y = x0 + (x1 - x0) * k * i / LIFT_STEPS, y0 + (y1 - y0) * k * i / LIFT_STEPS
+                        if self.absolute:
+                            await self._at(x, y)
+                        else:
+                            await self._move_to(self._dx(x), self._dy(y), rehome=False)
+                        await asyncio.sleep(lift / LIFT_STEPS)
+                    last = (x, y)
+            for n_point, (x, y) in enumerate(points[1:]):
                 if self.absolute:  # glide there in small steps: one jump would be a teleport, not a swipe
                     n = max(1, math.ceil(math.dist(last, (x, y)) / ABS_STEP - 1e-9))  # 0.3 / 0.03 is 10.000…02
                     for i in range(1, n + 1):
                         await self._at(last[0] + (x - last[0]) * i / n, last[1] + (y - last[1]) * i / n)
                         await asyncio.sleep(ABS_STEP_S)
                     last = (x, y)
-                    continue
-                await self._move_to(self._dx(x), self._dy(y), rehome=False)  # never home mid-drag
+                else:
+                    await self._move_to(self._dx(x), self._dy(y), rehome=False)  # never home mid-drag
+                if stops and n_point < len(stops) and stops[n_point]:
+                    await asyncio.sleep(stops[n_point])
             pause = rest if rest is not None else (HOLD if hold else 0)
             if pause:
                 await asyncio.sleep(pause)

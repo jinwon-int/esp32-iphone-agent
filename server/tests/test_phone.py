@@ -196,3 +196,56 @@ def test_a_gesture_away_from_the_edges_keeps_dead_reckoning(tmp_path):
     device.sent.clear()
     asyncio.run(phone.tap(0.4, 0.13))
     assert "home" not in device.sent and device.sent[0] == "move -50 -370"
+
+
+# --- moving icons across pages (#35, device run 2026-10-17) ------------------------------------------------------
+
+
+def test_drag_rests_at_each_via_point_so_a_page_can_flip(tmp_path, monkeypatch):
+    # hold an icon at the screen edge until iOS turns the page, then carry on to the target
+    phone, device = make_phone(tmp_path)
+    record_sleeps(monkeypatch, device)
+    asyncio.run(phone.drag([(0.2, 0.2), (0.98, 0.4), (0.6, 0.4)], pick=0.8, rest=1.0, stops=[2.5]))
+    i = device.sent.index("press")
+    assert device.sent[i:] == ["press", "sleep 0.8", "move 390 200", "sleep 2.5", "move -190 0", "sleep 1.0",
+                               "release"]
+
+
+def test_drag_stops_must_match_the_via_points(tmp_path):
+    phone, _ = make_phone(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(phone.drag([(0.2, 0.2), (0.6, 0.4)], stops=[1.0]))
+
+
+def test_absolute_drag_can_lift_slowly_before_carrying(tmp_path, monkeypatch):
+    # iOS 27 opened the item's menu instead of lifting it when the pointer raced off right after the hold
+    from hidagent.phone import LIFT_DIST, LIFT_STEPS
+
+    phone, device = make_phone(tmp_path, pointer="absolute")
+    record_sleeps(monkeypatch, device)
+    asyncio.run(phone.drag([(0.5, 0.5), (0.5, 0.2)], pick=0.9, rest=1.0, lift=0.6))
+    i = device.sent.index("press")
+    assert device.sent[i + 1] == "sleep 0.9"
+    lifting = device.sent[i + 2:i + 2 + 2 * LIFT_STEPS]
+    ats, sleeps = lifting[0::2], lifting[1::2]
+    assert all(a.startswith("at ") for a in ats) and sleeps == [f"sleep {0.6 / LIFT_STEPS}"] * LIFT_STEPS
+    y_after_lift = int(ats[-1].split()[2]) / ABS_MAX
+    assert abs(y_after_lift - (0.5 - LIFT_DIST)) < 1e-3  # the first LIFT_DIST of the way, slowly
+    assert device.sent[-2:] == ["sleep 1.0", "release"]
+
+
+def test_absolute_pointer_is_woken_before_acting_after_a_pause(tmp_path, monkeypatch):
+    # after the pointer idled, a tap clicked at its old spot (the AssistiveTouch button) and a swipe became a long
+    # press: the first report only woke the pointer
+    from hidagent.phone import ABS_WAKE_S
+
+    phone, device = make_phone(tmp_path, pointer="absolute")
+    record_sleeps(monkeypatch, device)
+    phone._reported -= 10  # ten seconds idle
+    asyncio.run(phone.tap(0.4, 0.6))
+    at = f"at {round(0.4 * ABS_MAX)} {round(0.6 * ABS_MAX)}"
+    assert device.sent[:3] == [at, f"sleep {ABS_WAKE_S}", at]
+    assert device.sent.count("click") == 1
+    device.sent.clear()
+    asyncio.run(phone.tap(0.4, 0.6))  # right after: no extra wake-up
+    assert device.sent[0] == at and f"sleep {ABS_WAKE_S}" not in device.sent
