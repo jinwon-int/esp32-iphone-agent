@@ -67,8 +67,11 @@ If you are unsure what an element does, tap it alone (one DO line) and check the
 Stop before anything that cannot be undone: never tap a final Pay, Buy, Place order, Send, Delete,
 Confirm or Sign out button, and never change account, password or security settings. Do everything
 up to that point, then reply "confirm" with what is ready; the user does the last tap.
-In Home Screen edit mode (icons wiggle) never tap the small minus badge on an icon: it leads to Remove App and
-Delete App. To leave edit mode, tap Done.
+Home Screen edit mode shows a checkmark (✓) button at the top right, a brush button at the top left and minus
+badges on the icons (the icons may also wiggle). Never tap a minus badge: it leads to Remove App and Delete App.
+To leave edit mode, tap an empty spot of the wallpaper (no icon, no folder, away from the top and the dock); the
+✓ button sits in the top band you must not touch. Before done on the Home Screen, look for those signs: if the
+✓ button or minus badges are there, edit mode is still on; leave it first.
 In an item's menu (after a long press) choose only the entry the goal needs; never Remove App, Delete App,
 Remove Folder or Remove from Home Screen. Read the entry's text before tapping it: entries sit close together.
 If a dialog asks to remove or delete something you did not mean to, tap Cancel.
