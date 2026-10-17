@@ -249,3 +249,78 @@ def test_absolute_pointer_is_woken_before_acting_after_a_pause(tmp_path, monkeyp
     device.sent.clear()
     asyncio.run(phone.tap(0.4, 0.6))  # right after: no extra wake-up
     assert device.sent[0] == at and f"sleep {ABS_WAKE_S}" not in device.sent
+
+
+# --- carry: hold at the edge until the screen shows N page turns (#35) -------------------------------------------
+
+
+def _jpeg(value):
+    import io
+
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", (90, 195), (value, value, value)).save(out, "JPEG")
+    return out.getvalue()
+
+
+class FlipScreen:
+    """A live screen whose frame follows a script: one entry per poll (each sleep of the phone)."""
+    live = True
+
+    def __init__(self, script):
+        self.script, self.i = script, 0
+
+    @property
+    def frame(self):
+        return self.script[min(self.i, len(self.script) - 1)]
+
+
+def carry_phone(tmp_path, monkeypatch, script):
+    phone, device = make_phone(tmp_path, pointer="absolute")
+    phone.screen = FlipScreen(script)
+
+    async def sleep(seconds):
+        device.sent.append(f"sleep {seconds}")
+        phone.screen.i += 1
+    monkeypatch.setattr("hidagent.phone.asyncio.sleep", sleep)
+    monkeypatch.setattr("hidagent.phone.ABS_STEP_S", 0)
+    return phone, device
+
+
+def test_carry_leaves_the_edge_as_soon_as_the_page_starts_to_turn(tmp_path, monkeypatch):
+    # held on, iOS turns page after page with no still moment between (device frames 2026-10-17): leave at the first
+    p1, p2, p3 = _jpeg(30), _jpeg(130), _jpeg(230)
+    script = [p1] * 40 + [_jpeg(80)] + [p2] * 8 + [_jpeg(170)] + [p3] * 40
+    phone, device = carry_phone(tmp_path, monkeypatch, script)
+    assert asyncio.run(phone.carry((0.85, 0.13), (0.5, 0.6), pages=1, pick=0.5, lift=0.6, rest=1.0)) == 1
+    assert device.sent[-2:] == ["sleep 1.0", "release"]
+    polls = device.sent.count("sleep 0.1")  # FLIP_POLL checks at the edge
+    assert 10 < polls < 25  # waited for the first turn's frames (index 40), left before the second (index 49)
+    assert f"at {round(0.5 * ABS_MAX)} {round(0.6 * ABS_MAX)}" in device.sent  # then carried to the target
+
+
+def test_carry_turns_left_for_negative_pages(tmp_path, monkeypatch):
+    p1, p2 = _jpeg(30), _jpeg(200)
+    phone, device = carry_phone(tmp_path, monkeypatch, [p1] * 40 + [_jpeg(120)] + [p2] * 30)
+    assert asyncio.run(phone.carry((0.5, 0.5), (0.3, 0.6), pages=-1)) == 1
+    assert any(c.startswith(f"at {round(0.015 * ABS_MAX)} ") for c in device.sent)
+
+
+def test_carry_puts_the_item_back_when_no_page_turns(tmp_path, monkeypatch):
+    phone, device = carry_phone(tmp_path, monkeypatch, [_jpeg(30)] * 400)
+    with pytest.raises(RuntimeError, match="page did not turn"):
+        asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1))
+    assert device.sent[-1] == "release"
+    back = f"at {round(0.3 * ABS_MAX)} {round(0.3 * ABS_MAX)}"
+    assert back in device.sent[-6:]  # carried back to where it came from before letting go
+
+
+def test_carry_needs_a_live_screen_and_a_page_count(tmp_path):
+    phone, _ = make_phone(tmp_path, pointer="absolute")
+    with pytest.raises(RuntimeError):
+        asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1))  # no screen
+    phone.screen = FlipScreen([_jpeg(30)])
+    for pages in (0, 2, -2):
+        with pytest.raises(ValueError):
+            asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=pages))

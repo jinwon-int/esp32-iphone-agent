@@ -35,6 +35,23 @@ def changed(before: bytes | None, after: bytes | None, ignore: tuple = (), thres
     return hits >= 6
 
 
+def page_change(before: bytes | None, after: bytes | None) -> float:
+    """How different two screens' content is: mean grey difference (0-255) of the band between the status bar and
+    the page dots, at 32x48. A Home Screen page turn scores about 15-45; edit mode's wiggle and a dragged icon stay
+    under about 10 (measured 2026-10-17, #35). 0 without both frames: no evidence of a turn.
+    """
+    if not before or not after:
+        return 0.0
+    a, b = _gray(before), _gray(after)
+    if a.size != b.size:
+        return 255.0
+    w, h = a.size
+    box = (0, int(0.06 * h), w, int(0.78 * h))
+    d = ImageChops.difference(a.crop(box).resize((32, 48), Image.BILINEAR),
+                              b.crop(box).resize((32, 48), Image.BILINEAR)).tobytes()
+    return sum(d) / len(d)
+
+
 def pointer(before: bytes, after: bytes, near: tuple[float, float], shift: float,
             reach: tuple[float, float] = (0.12, 0.08)) -> tuple[float, float] | None:
     """Where the pointer is in `before`, given it moved right by `shift` (fraction of width) in `after`.
