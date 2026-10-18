@@ -341,10 +341,13 @@ async def back():
 
 @app.post("/api/raw")
 async def raw(t: Text):
-    """Debug only: send one protocol line to the board as-is."""
+    """Debug only: send one protocol line to the board as-is; returns its reply (e.g. hidstat's counters, #60)."""
     if not DEBUG:
         raise HTTPException(404)
-    return await act(device.send(t.text))
+    try:
+        return {"ok": True, "reply": await device.send(t.text)}
+    except DeviceError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 @app.post("/api/bench/pointer")
