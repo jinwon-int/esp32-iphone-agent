@@ -24,6 +24,9 @@ def measure(args):
         last = None
         while not stop.is_set():
             d = api("/api/frame.jpg", raw=True)
+            if not isinstance(d, bytes):  # no live screen for a moment: skip, the next poll asks again
+                time.sleep(0.02)
+                continue
             h = hashlib.md5(d).digest()
             if h != last:
                 rec.append((time.time(), d))

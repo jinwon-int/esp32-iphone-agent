@@ -68,8 +68,21 @@ def api(path, body=None, raw=False, timeout=60):
         return {"ok": False, "status": e.code, "detail": e.read().decode()[:300]}
 
 
+FRAME_WAIT = 5.0  # seconds to wait out a lost live screen (the screen app reconnecting) before stopping
+
+
 def frame(step=None):
+    """The live screen as JPEG bytes. While the server has none (404 "no live screen", e.g. the screen app
+    reconnecting) it asks again for up to FRAME_WAIT seconds, then stops: never act without seeing the phone."""
+    waited = 0.0
     data = api("/api/frame.jpg", raw=True)
+    while not isinstance(data, bytes):
+        if waited >= FRAME_WAIT:
+            raise SystemExit(f"STOP: no live screen for {FRAME_WAIT:.0f} s ({data.get('status')}): "
+                             "start screen mirroring on the phone, then run again")
+        time.sleep(0.5)
+        waited += 0.5
+        data = api("/api/frame.jpg", raw=True)
     if step:
         (_subdir("log") / f"{time.strftime('%H%M%S')}-{step}.jpg").write_bytes(data)
     return data
