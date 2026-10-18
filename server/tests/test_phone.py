@@ -315,7 +315,7 @@ def test_carry_leaves_the_edge_as_soon_as_the_page_starts_to_turn(tmp_path, monk
     last_edge = max(i for i, c in enumerate(device.sent) if c == edge)
     after = [c for c in device.sent[last_edge + 1:] if c.startswith("at ")]
     lx, ly = map(int, after[-1].split()[1:])
-    assert abs(lx - 0.5 * ABS_MAX) <= 2 and abs(ly - 0.6 * ABS_MAX) <= 2 and len(after) > 1  # glided off (#35)
+    assert abs(lx - 0.5 * ABS_MAX) <= 2 and abs(ly - 0.6 * ABS_MAX) <= 2 and len(after) == 1  # jumped off (#54)
     assert any(abs(int(c.split()[1]) - 0.5 * ABS_MAX) <= 2 and abs(int(c.split()[2]) - 0.6 * ABS_MAX) <= 2
                for c in device.sent if c.startswith("at "))  # then carried to the target
 
@@ -446,6 +446,23 @@ def test_carry_counts_the_settle_from_the_turn_start_not_from_its_detection(tmp_
     last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
     left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
     assert 48 <= left_at < 52  # on the first still frame: the next turn's decision comes before its frames do
+
+
+def test_carry_jumps_off_the_edge_once_the_turn_settled(tmp_path, monkeypatch):
+    # gliding off took the item from x 0.03 to only 0.10 in the 0.2 s before iOS began the next turn (#54, device
+    # 2026-10-18 09:32 KST); jumping right as a turn began made iOS turn back (#52): so wait, then jump
+    a, b = _jpeg(30), _jpeg(33)
+    push = 4
+    script = ([_jpeg(30, (0.3, 0.3))] * 3 + [a] * 37 + [_jpeg(42)] * push + [_jpeg(31)] * push
+              + [_jpeg(33)] * push + [b] * push + [_jpeg(33)] * push + [_jpeg(200)] + [_jpeg(230)] * 40)
+    phone, device = carry_phone(tmp_path, monkeypatch, script)
+    log = _edge_log(phone, device)
+    asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1))
+    edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"
+    last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
+    off = [c for c, _ in log[last_edge + 1:] if c.startswith("at ")]
+    assert len(off) >= 1 and len(set(off)) == 1  # straight from the edge to the target: no steps in between
+    assert log[last_edge + 1][1] >= 48  # and only once the turn had settled
 
 
 def test_a_single_jolt_at_the_edge_is_not_a_page_turn(tmp_path, monkeypatch):
