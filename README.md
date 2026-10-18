@@ -288,11 +288,15 @@ The board holds no logic. On connecting, board and server first prove to each ot
 (HMAC-SHA256 over fresh random nonces, so the key itself never crosses the network):
 
 ```text
-board  -> hello <last reset reason> <uptime ms> <board nonce>
+board  -> hello <last reset reason>,wifi=<a>/<b> <uptime ms> <board nonce>
 server -> challenge <server nonce> <HMAC(key, "server:<board nonce>:<server nonce>")>
 board  -> auth <HMAC(key, "board:<server nonce>:<board nonce>")>
 server -> ok                       (or "err auth" and the connection is closed)
 ```
+
+`wifi=<a>/<b>` is the last reason (ESP-IDF `WIFI_REASON_*`, 0 = none) the first and the second Wi-Fi dropped the board,
+so a drop away from home shows in the server log (`board connected from …`) without a serial console. The server
+logs the word as is.
 
 Then the server sends one command per line over TCP and the board answers `ok` or `err <reason>`. Every line carries a
 tag tied to this connection and its position, `session = HMAC(key, "session:<board nonce>:<server nonce>")`:

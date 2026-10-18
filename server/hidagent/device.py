@@ -1,7 +1,7 @@
 """TCP link to the HID bridge board (see firmware/hid_bridge).
 
 Both ends prove they know DEVICE_KEY before any command is sent (see README, "Board protocol"):
-  board  -> hello <reset reason> <uptime ms> <board nonce>
+  board  -> hello <reset reason>,wifi=<a>/<b> <uptime ms> <board nonce>   (a/b: last Wi-Fi drop reason per network)
   server -> challenge <server nonce> <HMAC(key, "server:<board nonce>:<server nonce>")>
   board  -> auth <HMAC(key, "board:<server nonce>:<board nonce>")>
   server -> ok
