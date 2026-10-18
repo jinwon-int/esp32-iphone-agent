@@ -465,6 +465,25 @@ def test_carry_jumps_off_the_edge_once_the_turn_settled(tmp_path, monkeypatch):
     assert log[last_edge + 1][1] >= 48  # and only once the turn had settled
 
 
+def test_carry_sees_a_quick_turn_between_look_alike_pages(tmp_path, monkeypatch):
+    # the turn slid 9.0, 15.0, 5.2 on three pushed frames: never twice in a row above FLIP_MOTION, so it was missed,
+    # and the next turn (to page 1) was the first one seen (#54, device 2026-10-18 18:07 KST). The new page held
+    # still 0.35 s though, 14-17 away from the frame before the turn: that counts as a turn now
+    a = _jpeg(30)
+    push = 4
+    script = ([_jpeg(30, (0.3, 0.3))] * 3 + [a] * 37
+              + [_jpeg(38)] * push + [_jpeg(49)] * push + [_jpeg(46)] * push  # 40, 44 (the one sliding frame), 48
+              + [_jpeg(46)] * push + [_jpeg(46)] * push  # 52, 56: the new page holds still
+              + [_jpeg(200)] + [_jpeg(230)] * 40)  # index 60: the next turn
+    phone, device = carry_phone(tmp_path, monkeypatch, script)
+    log = _edge_log(phone, device)
+    assert asyncio.run(phone.carry((0.3, 0.3), (0.5, 0.6), pages=1)) == 1
+    edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"
+    last_edge = max(k for k, (c, _) in enumerate(log) if c == edge)
+    left_at = next(i for c, i in log[last_edge + 1:] if c.startswith("at "))
+    assert 48 <= left_at < 60  # after the first turn, before the next one
+
+
 def test_a_single_jolt_at_the_edge_is_not_a_page_turn(tmp_path, monkeypatch):
     # on the last page iOS bounces at the edge: one frame slid 14.8, the way back 5.0 and less (device 2026-10-18)
     start = (0.3, 0.3)

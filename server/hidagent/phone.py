@@ -59,6 +59,10 @@ FLIP_MOTION_FRAMES = 2  # ... on this many new frames in a row: a turn even betw
                         # folders in the same slots kept cells_changed at 0.42 through a whole turn, so only the
                         # next turn was seen and two pages turned (#54); turns slid 12.7/15.8 and 26.9/28.0, the
                         # last page's bounce at the edge once 14.8 (device frames 2026-10-18)
+FLIP_AWAY = 12.0        # vision.page_change against the last still frame before the turn above this on
+                        # FLIP_MOTION_FRAMES new frames in a row: the page turned, even when it slid above
+                        # FLIP_MOTION on one frame only (look-alike pages read 13.7-20 once turned, a held
+                        # item at the edge stays under 6 against a still frame; 4 device runs, #54)
 FLIP_STILL = 6.0        # vision.page_change between two polls below this: the turn's animation is over
 FLIP_SETTLE_MIN = 0.25  # seconds after the turn began before it may count as over (the animation)
 FLIP_SETTLE_MAX = 1.0   # seconds to wait for that before leaving the edge anyway
@@ -471,25 +475,37 @@ class Phone:
 
     async def _turn_started(self, before: bytes | None) -> float | None:
         """Wait at the edge until a page turn has begun: most of the content differs from ``before``, or the content
-        slides on FLIP_MOTION_FRAMES newly pushed frames in a row (look-alike pages differ in few cells, #54).
+        slides on FLIP_MOTION_FRAMES newly pushed frames in a row (look-alike pages differ in few cells, #54), or it
+        stays FLIP_AWAY from the last still frame on as many new frames (a quick turn slides on one frame only).
         Returns when (_clock) the turn was first seen: the first of those sliding frames, if any; None if no turn."""
-        waited, prev, sliding, slid_at = 0.0, before, 0, 0.0
+        waited, prev, still, sliding, slid_at, away, away_at = 0.0, before, before, 0, 0.0, 0, 0.0
         while waited < FLIP_TIMEOUT:
             await asyncio.sleep(FLIP_POLL)
             waited += FLIP_POLL
             now = self.screen.frame
             if vision.cells_changed(before, now) > FLIP_CELLS:
-                return slid_at if sliding else _clock()
+                return slid_at if sliding else away_at if away else _clock()
             if now is prev:  # no new frame yet
                 continue
-            if vision.page_change(prev, now) > FLIP_MOTION:
+            step = vision.page_change(prev, now)
+            if step > FLIP_MOTION:
                 sliding += 1
                 if sliding == 1:
                     slid_at = _clock()
             else:
                 sliding = 0
+            if vision.page_change(still, now) > FLIP_AWAY:  # moved away from the page as it last held still
+                away += 1
+                if away == 1:
+                    away_at = _clock()
+            else:
+                away = 0
+                if step < FLIP_STILL:  # still and not turned: measure from here (the item settling at the edge)
+                    still = now
             if sliding >= FLIP_MOTION_FRAMES:
                 return slid_at
+            if away >= FLIP_MOTION_FRAMES:
+                return away_at
             prev = now
         return None
 
