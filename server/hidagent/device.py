@@ -127,7 +127,9 @@ class Device:
             return 8  # an idle check: tolerate a Wi-Fi hiccup rather than drop a healthy board
         return 5
 
-    async def send(self, command: str) -> None:
+    async def send(self, command: str) -> str:
+        """Send one command and return the board's reply: "ok", or "ok <data>" (e.g. hidstat, #60). Anything else
+        (an "err ..." or no reply) raises DeviceError."""
         if "\n" in command or "\r" in command:  # one line is one command: text must not smuggle in another
             raise DeviceError("a command must be a single line")
         if len(command.encode()) > MAX_LINE:
@@ -159,8 +161,9 @@ class Device:
         if command != "ping":
             self._last = self._beat  # last real command: the phone's idle time
             log.debug("%s -> %s (%.0f ms)", command, reply, (time.time() - started) * 1000)
-        if reply != "ok":
+        if reply != "ok" and not reply.startswith("ok "):
             raise DeviceError(reply or "board disconnected")
+        return reply
 
     async def keep_awake(self, idle: float = 25, heartbeat: float = 2, screen=None) -> None:
         """While idle: ping every few seconds, so a board that was unplugged or hung shows as gone within

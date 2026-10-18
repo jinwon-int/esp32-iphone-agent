@@ -3,6 +3,7 @@
 //
 // Protocol (one command per line, the board answers "ok" or "err <why>"):
 //   ping | home | move <dx> <dy> | press | release | click
+//   hidstat  (answers "ok resent=<n> failed=<n>": button reports sent again / given up, see confirmButtons, #60)
 //   scroll <v> <h> | type <ascii text> | key <combo, e.g. cmd+h, enter>
 //   at <x> <y>   (ABSOLUTE_POINTER builds only: put the pointer at x, y in 0..32767 across the screen)
 //   consumer <home | search | globe | keyboard | 0x0001..0x03ff>   (a consumer-page key, see consumerUsage)
@@ -121,6 +122,38 @@ void movePaced(long dx, long dy) {
 }
 #endif
 
+// The library drops a HID report when the USB endpoint is still busy (USBHID::SendReport: "not ready", or the wait
+// for the previous one timed out) and press()/release()/click() never say so. A dropped release left the phone
+// with a finger down: a Home Screen swipe stopped between two pages until the screen was touched (#60). So after
+// every button change send the current button state again until the phone took it; the same state twice is a
+// no-op for the phone. hidResent/hidFailed count the retries and the give-ups (see "hidstat").
+uint32_t hidResent = 0, hidFailed = 0;
+const int BUTTON_TRIES = 3;
+const int BUTTON_RETRY_MS = 10;
+
+bool confirmButtons() {
+  uint8_t b = mouse.isPressed(MOUSE_LEFT) ? MOUSE_LEFT : 0;
+  for (int i = 0; i < BUTTON_TRIES; i++) {
+#if ABSOLUTE_POINTER
+    hid_abs_mouse_report_t r;
+    r.x = (int16_t)absX;
+    r.y = (int16_t)absY;
+#else
+    hid_mouse_report_t r;
+    r.x = 0;
+    r.y = 0;
+#endif
+    r.buttons = b;
+    r.wheel = 0;
+    r.pan = 0;
+    if (mouse.sendReport(r)) return true;
+    hidResent++;
+    delay(BUTTON_RETRY_MS);
+  }
+  hidFailed++;
+  return false;
+}
+
 uint8_t keyCode(const String &k) {
   if (k == "enter") return KEY_RETURN;
   if (k == "esc") return KEY_ESC;
@@ -220,9 +253,23 @@ String run(const String &line) {
   if (cmd == "at") return "err absolute pointer off (build with ABSOLUTE_POINTER=1)";
   if (cmd == "scroll") { mouse.move(0, 0, a, b); return "ok"; }
 #endif
-  if (cmd == "press") { mouse.press(MOUSE_LEFT); return "ok"; }
-  if (cmd == "release") { mouse.release(MOUSE_LEFT); return "ok"; }
-  if (cmd == "click") { mouse.press(MOUSE_LEFT); delay(60); mouse.release(MOUSE_LEFT); return "ok"; }
+  if (cmd == "press") {
+    mouse.press(MOUSE_LEFT);
+    return confirmButtons() ? "ok" : "err press not sent (usb busy)";
+  }
+  if (cmd == "release") {
+    mouse.release(MOUSE_LEFT);
+    return confirmButtons() ? "ok" : "err release not sent (usb busy)";
+  }
+  if (cmd == "click") {
+    mouse.press(MOUSE_LEFT);
+    bool down = confirmButtons();
+    delay(60);
+    mouse.release(MOUSE_LEFT);
+    bool up = confirmButtons();
+    return up ? (down ? "ok" : "err click press not sent (usb busy)") : "err click release not sent (usb busy)";
+  }
+  if (cmd == "hidstat") return "ok resent=" + String(hidResent) + " failed=" + String(hidFailed);
   if (cmd == "type") { keyboard.print(arg); return "ok"; }
   if (cmd == "key") return pressCombo(arg) ? "ok" : "err unknown key";
   if (cmd == "consumer") {

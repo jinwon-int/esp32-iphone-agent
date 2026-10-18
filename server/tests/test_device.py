@@ -108,6 +108,28 @@ def test_round_trip_with_a_fake_board():
     asyncio.run(scenario())
 
 
+def test_ok_with_a_payload_is_returned_and_anything_else_still_fails():
+    # "hidstat" answers "ok resent=<n> failed=<n>" (#60): an "ok ..." reply is a success that carries data
+    async def scenario():
+        device, server, port = await serve()
+        board = await board_connected(port)
+        replies = {"hidstat": "ok resent=2 failed=0", "release": "err release not sent (usb busy)",
+                   "okay": "okay"}
+        task = asyncio.create_task(board.serve(lambda command: replies.get(command, "ok")))
+        assert await device.wait_connected(2)
+        assert await device.send("ping") == "ok"
+        assert await device.send("hidstat") == "ok resent=2 failed=0"
+        with pytest.raises(DeviceError, match="release not sent"):
+            await device.send("release")
+        with pytest.raises(DeviceError, match="okay"):  # only "ok" or "ok <data>", not anything starting with ok
+            await device.send("okay")
+        task.cancel()
+        board.writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+
+
 def test_board_with_wrong_key_is_refused():  # an attacker ignores the server's proof and answers anyway
     async def scenario():
         device, server, port = await serve()
