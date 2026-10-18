@@ -406,9 +406,10 @@ class Phone:
         on ``target`` there. Edit mode only.
 
         Picks the item up (``pick`` + slow ``lift``), holds it at the screen edge and watches the live screen: as soon
-        as the page starts to turn (see _turn_started) and the turn has settled it leaves the edge, so exactly one page
-        turns. Timing the hold instead turned one to three pages for the same wait (#35); while held on, iOS turns
-        page after page with no still moment between them, so only the first turn can be told apart reliably.
+        as the page starts to turn (see _turn_started) and the turn has settled it jumps off the edge to ``target`` in
+        one report, so exactly one page turns. Timing the hold instead turned one to three pages for the same wait
+        (#35); while held on, iOS turns page after page with no still moment between them, so only the first turn can
+        be told apart reliably.
         For two pages, carry twice with an empty spot on the page between. Returns 1. When the page does not turn
         within FLIP_TIMEOUT, the item is carried back to ``start`` and let go there, and RuntimeError is raised.
         """
@@ -434,7 +435,8 @@ class Phone:
                 await asyncio.sleep(rest)
                 raise RuntimeError(f"page did not turn within {FLIP_TIMEOUT} s at the screen edge")
             await self._turn_settled(began)  # leaving mid-turn made iOS turn back (device 2026-10-17 23:21, #35)
-            await self._glide(edge, target)
+            # then leave at once: gliding off left the item in iOS's edge zone into the next turn (#54, 09:32 KST)
+            await self._jump(target)
             await asyncio.sleep(max(rest, FLIP_SETTLE))
         finally:
             await self.device.send("release")
