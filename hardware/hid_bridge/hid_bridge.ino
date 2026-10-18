@@ -18,7 +18,7 @@
 //
 // Before any command, board and server prove to each other that they know DEVICE_KEY (HMAC-SHA256 over fresh
 // nonces), so nothing else on the network can pose as the server and drive the phone:
-//   board  -> hello <reset reason> <uptime ms> <board nonce>
+//   board  -> hello <why> <uptime ms> <board nonce>   (why: reset reason + ",wifi=<a>/<b>", see wifiDrop below)
 //   server -> challenge <server nonce> <HMAC(key, "server:<board nonce>:<server nonce>")>
 //   board  -> auth <HMAC(key, "board:<server nonce>:<board nonce>")>
 //   server -> ok
@@ -100,6 +100,12 @@ const unsigned long WIFI_SWITCH_MS = 15000;  // with WIFI_SSID2: try the other n
 int wifiNet = 0;                             // 0 = WIFI_SSID, 1 = WIFI_SSID2
 unsigned long wifiDownSince = 0;             // when Wi-Fi was last seen down (or the current network was chosen)
 bool wifiWasUp = false;
+// Set from the Wi-Fi task (onWifiEvent). Joining is not "up": WL_CONNECTED waits for an address (DHCP), and an iPhone
+// hotspot can be slow to give one, so a join restarts the switch timer instead of being cut off by it (#65).
+volatile unsigned long wifiJoinedAt = 0;
+// The last reason (esp_wifi WIFI_REASON_*, 0 = none) each network dropped the board, sent in the hello, so a drop
+// away from home can be read in the server log without a serial console (#65). Our own leave (a switch) is skipped.
+volatile uint8_t wifiDrop[2] = {0, 0};
 String session;      // per-connection key from the handshake; empty while not authenticated
 uint32_t seq = 0;    // number of the next command in this session
 const unsigned MAX_LINE = 512;
@@ -351,7 +357,9 @@ const char *resetReason() {
 // Mutual challenge-response on DEVICE_KEY; false means: not our server (or a different key), hang up.
 bool handshake() {
   String boardNonce = nonce();
-  server.printf("hello %s %lu %s\n", resetReason(), millis(), boardNonce.c_str());
+  char why[48];  // no spaces: the server reads the hello as four words
+  snprintf(why, sizeof why, "%s,wifi=%u/%u", resetReason(), wifiDrop[0], wifiDrop[1]);
+  server.printf("hello %s %lu %s\n", why, millis(), boardNonce.c_str());
   String line = readLine(3000);  // "challenge <server nonce> <proof>"
   int sp = line.indexOf(' ', 10);
   if (!line.startsWith("challenge ") || sp != 42) return false;  // 10 + 32 hex digits
@@ -382,12 +390,22 @@ void wifiBegin(int net) {
   WiFi.begin(WIFI_SSID, WIFI_PASS);  // not wifiBegin(0): that called itself for ever, and the watchdog reset the board
 }
 
+void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {  // runs in the Wi-Fi task: only sets two values
+  if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
+    wifiJoinedAt = millis();
+  } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED && info.wifi_sta_disconnected.reason != WIFI_REASON_ASSOC_LEAVE) {
+    wifiDrop[wifiNet] = info.wifi_sta_disconnected.reason;
+  }
+}
+
 // True while Wi-Fi is up. Never blocks: WiFi.begin() returns at once and the driver keeps retrying; with a second
 // network, switch after WIFI_SWITCH_MS without a connection (e.g. home Wi-Fi out of reach, the hotspot is on).
 bool wifiUp() {
   if (WiFi.status() == WL_CONNECTED) { wifiWasUp = true; return true; }
   if (wifiWasUp) { wifiWasUp = false; wifiDownSince = millis(); }
 #ifdef WIFI_SSID2
+  unsigned long joined = wifiJoinedAt;
+  if ((long)(joined - wifiDownSince) > 0) wifiDownSince = joined;  // joined since: give it the full time for an address
   if (millis() - wifiDownSince > WIFI_SWITCH_MS) {
     WiFi.disconnect();
     wifiBegin(1 - wifiNet);
@@ -453,6 +471,7 @@ void setup() {
   WiFi.setHostname("hid-bridge");
   WiFi.setSleep(false);  // modem sleep adds ~100 ms per command
   WiFi.setAutoReconnect(true);
+  WiFi.onEvent(onWifiEvent);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 }
 

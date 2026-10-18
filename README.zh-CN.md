@@ -225,11 +225,13 @@ LLM_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
 板子本身不含任何逻辑。连上后，板子和服务端先互相证明自己知道 `DEVICE_KEY`（对新随机数做 HMAC-SHA256，密钥本身不在网络上传输）：
 
 ```text
-board  -> hello <上次重启原因> <开机毫秒数> <板子随机数>
+board  -> hello <上次重启原因>,wifi=<a>/<b> <开机毫秒数> <板子随机数>
 server -> challenge <服务端随机数> <HMAC(key, "server:<板子随机数>:<服务端随机数>")>
 board  -> auth <HMAC(key, "board:<服务端随机数>:<板子随机数>")>
 server -> ok                       （或 "err auth" 并断开连接）
 ```
+
+`wifi=<a>/<b>` 是第一个和第二个 Wi-Fi 上次断开板子的原因码（ESP-IDF `WIFI_REASON_*`，0 = 无），不接串口也能在服务端日志里看到外出时为何掉线。
 
 之后服务端通过 TCP 每行发一条命令，板子回复 `ok` 或 `err <原因>`。每一行都带有绑定本次连接和序号的标签，
 `session = HMAC(key, "session:<板子随机数>:<服务端随机数>")`：

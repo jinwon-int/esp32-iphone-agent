@@ -20,11 +20,13 @@ def test_send_without_board_fails_fast():
 KEY = b"0123456789abcdef0123456789abcdef"
 
 
-async def connect_board(port: int, key: bytes = KEY, hello: str | None = None, check_server: bool = True):
+async def connect_board(
+    port: int, key: bytes = KEY, hello: str | None = None, check_server: bool = True, why: str = "power-on"
+):
     """Open a connection and run the board's half of the handshake; returns (reader, writer, server's last line)."""
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     board_nonce = auth.nonce()
-    writer.write((hello or f"hello power-on 1234 {board_nonce}").encode() + b"\n")
+    writer.write((hello or f"hello {why} 1234 {board_nonce}").encode() + b"\n")
     await writer.drain()
     line = (await reader.readline()).decode().split()
     if len(line) != 3 or line[0] != "challenge":
@@ -416,3 +418,19 @@ def test_flood_from_many_addresses_cannot_lock_the_board_out():
         server.close()
 
     asyncio.run(scenario())
+
+
+def test_hello_with_wifi_drop_reasons_is_accepted(caplog):
+    """#65: the firmware appends ",wifi=<a>/<b>" to the reset reason; it stays one word and is logged as is."""
+
+    async def scenario():
+        device, server, port = await serve()
+        with caplog.at_level("INFO", logger="hidagent.device"):
+            _, writer, result = await connect_board(port, why="power-on,wifi=201/15")
+        assert result == "ok"
+        assert device.connected
+        writer.close()
+        server.close()
+
+    asyncio.run(scenario())
+    assert "power-on,wifi=201/15 1234" in caplog.text
