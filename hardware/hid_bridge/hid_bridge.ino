@@ -332,7 +332,7 @@ void wifiBegin(int net) {
 #ifdef WIFI_SSID2
   if (net == 1) { WiFi.begin(WIFI_SSID2, WIFI_PASS2); return; }
 #endif
-  wifiBegin(0);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);  // not wifiBegin(0): that called itself for ever, and the watchdog reset the board
 }
 
 // True while Wi-Fi is up. Never blocks: WiFi.begin() returns at once and the driver keeps retrying; with a second
