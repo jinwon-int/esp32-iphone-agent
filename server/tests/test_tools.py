@@ -108,3 +108,22 @@ def test_unknown_op_stops(steps, monkeypatch):
     with pytest.raises(SystemExit) as e:
         steps.run([{"op": "delete-app"}])
     assert e.value.code == 2 and steps.calls == []
+
+
+def test_frame_waits_out_a_brief_loss_of_the_live_screen(layout, monkeypatch, tmp_path):
+    # the screen app reconnecting: /api/frame.jpg answered 404 "no live screen" for a moment, and the JSON error was
+    # handed on as a frame (which_page: "a bytes-like object is required, not 'dict'", device 2026-10-18 18:06 KST)
+    replies = [{"ok": False, "status": 404, "detail": "no live screen"}] * 2 + [b"jpeg"]
+    monkeypatch.setattr(layout, "api", lambda path, body=None, raw=False, timeout=60: replies.pop(0))
+    monkeypatch.setattr(layout.time, "sleep", lambda s: None)
+    monkeypatch.setenv("HIDAGENT_TOOLS_DIR", str(tmp_path / "t"))
+    assert layout.frame("step") == b"jpeg"
+    assert [p.name.endswith("-step.jpg") for p in (tmp_path / "t" / "log").iterdir()] == [True]
+
+
+def test_frame_stops_when_the_live_screen_stays_away(layout, monkeypatch):
+    # acting without seeing the phone is what the stop rules exist for: stop with a clear message, not a traceback
+    monkeypatch.setattr(layout, "api", lambda path, body=None, raw=False, timeout=60: {"ok": False, "status": 404})
+    monkeypatch.setattr(layout.time, "sleep", lambda s: None)
+    with pytest.raises(SystemExit, match="no live screen"):
+        layout.frame()

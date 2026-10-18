@@ -32,6 +32,8 @@ echo '[{"op":"carry","from":[0.2,0.3],"to":[0.4,0.3],"pages":1,"expect":"p2"}]' 
 
 - Each `steps.py` step checks edit mode before it runs and again after it. A menu, a share sheet or a closed folder
   stops the run (exit 2 before a step, 4 after, 3 when the step failed or landed on another page).
+- When the live screen drops out (the screen app reconnecting), the tools ask again for up to 5 s, then stop
+  instead of acting blind.
 - Steps marked `"infolder": true` never long-press, because a long press inside an open folder can open an app's menu.
 - There is no remove/delete operation. Agents driving these tools must still never choose Remove App, Delete App or
   Remove from Home Screen in a menu.
