@@ -1,4 +1,5 @@
-"""TCP link to the HID bridge board (see firmware/hid_bridge).
+"""Link to the HID bridge board (see firmware/hid_bridge): TCP (`serve`), or any reader/writer pair (`attach`,
+e.g. the Bluetooth LE link in ble.py) carrying the same lines.
 
 Both ends prove they know DEVICE_KEY before any command is sent (see README, "Board protocol"):
   board  -> hello <reset reason>,wifi=<a>/<b> <uptime ms> <board nonce>   (a/b: last Wi-Fi drop reason per network)
@@ -54,6 +55,11 @@ class Device:
     async def serve(self, host: str, port: int):
         # limit: board lines are short; a longer one raises ValueError instead of buffering 64 KiB per connection
         return await asyncio.start_server(self._accept, host, port, limit=1024)
+
+    async def attach(self, reader, writer) -> None:
+        """Authenticate a board on an already open stream (e.g. BLE) and make it the board in use, as a TCP
+        connection would be; on failure the writer is closed and `connected` stays as it was."""
+        await self._accept(reader, writer)
 
     async def _accept(self, reader, writer):
         peer = writer.get_extra_info("peername")
