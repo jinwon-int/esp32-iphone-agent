@@ -325,6 +325,24 @@ If the Wi-Fi link drops, the board releases all buttons and reconnects on its ow
 port sleeps: the board then tries to wake it and otherwise answers `err phone usb asleep` instead of waiting. A watchdog
 restarts the board if it ever stops responding.
 
+### Over Bluetooth LE (`BLE_LINK=1`, experimental)
+
+`BLE_LINK=1 hardware/flash.sh` builds a board for a controller **app on the same phone** instead of the server: no
+Wi-Fi at all (`secrets.h` needs only `DEVICE_KEY`), and the server in this repository cannot drive it. The board is a
+BLE peripheral named `HID Bridge` advertising one service; the lines above travel over it unchanged, as a byte stream:
+
+| | UUID | |
+|---|---|---|
+| Service | `23c2efd6-8e20-4e1b-a71a-e26bc6d9320c` | advertised |
+| RX | `aebdbe49-932f-4ce9-8d9d-ae64db99d2ed` | app → board: write, with or without response; any split, lines end in `\n` |
+| TX | `7f186178-861e-4e86-98e0-347e67454906` | board → app: notify, a line split into pieces of MTU − 3 bytes |
+
+The board says `hello` once the app subscribes to TX (the reason ends in `,ble` instead of `,wifi=…`), then the
+handshake, tags and commands are exactly as over TCP. One central at a time: one that has not subscribed within 5 s,
+fails the handshake, sends a bad tag or a line over 512 bytes, or has more than 1 KB waiting unread is disconnected,
+and the board advertises again. A session belongs to one connection: a new connection always gets a new hello, and
+losing the connection releases all buttons, like a dropped TCP link.
+
 ## Project layout
 
 ```
@@ -400,7 +418,10 @@ The agent can do anything you can do on an unlocked phone, so access to it is gu
   to the board port cannot drive the phone or kick the real board off, and someone who intercepts the board's
   connection (e.g. ARP spoofing) and relays the handshake still cannot inject or replay commands. The link is not
   encrypted: someone on the network can read the commands, including typed text — unless it runs
-  through the optional WireGuard tunnel ("Board away from home").
+  through the optional WireGuard tunnel ("Board away from home"). The same holds for the Bluetooth LE link
+  (`BLE_LINK=1`): it carries the same handshake and tags but no BLE pairing, so someone in radio range can read the
+  commands, though not inject them. They can also take the one connection (a few seconds each time, again and again),
+  which keeps the app out: a denial of service, not control.
 - **Push screen** — the listener binds to the VPN address you give it only (a wildcard is refused), the app proves a
   separate `PUSH_TOKEN` in the upgrade request (it lives on the phone, so it is not the UI token), a frame announcing
   more than 1 MB closes the connection unread, non-JPEG bytes and frames over 15/s are dropped, and strangers get the

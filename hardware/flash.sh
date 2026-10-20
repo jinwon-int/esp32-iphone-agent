@@ -4,6 +4,8 @@
 #   FLASH_SIZE: the board's flash chip, default 8M (XIAO ESP32S3). 4MB boards such as the ESP32-S3-Zero or most
 #   ESP32-S3 Super Minis need FLASH_SIZE=4M; the firmware itself needs about 1 MB.
 #   ABSOLUTE_POINTER=1: an absolute pointer instead of a relative mouse (#14); set POINTER_MODE=absolute on the server.
+#   BLE_LINK=1: experimental, the controller is an app on the phone over Bluetooth LE instead of the server over
+#   Wi-Fi (no Wi-Fi at all; secrets.h needs only DEVICE_KEY). See README, "Board protocol".
 # A running bridge is a TinyUSB device, so it is first kicked into the ROM
 # bootloader with a 1200-baud touch; a blank board is flashed directly.
 set -euo pipefail
@@ -31,9 +33,14 @@ case "$ABSOLUTE_POINTER" in
   0|1) ;;
   *) echo "ABSOLUTE_POINTER must be 0 or 1 (got '$ABSOLUTE_POINTER')" >&2; exit 2 ;;
 esac
-DEFINES="-DABSOLUTE_POINTER=$ABSOLUTE_POINTER"; [[ $DEBUG == 1 ]] && DEFINES+=" -DDEBUG_SERIAL=1"
+BLE_LINK=${BLE_LINK:-0}
+case "$BLE_LINK" in
+  0|1) ;;
+  *) echo "BLE_LINK must be 0 or 1 (got '$BLE_LINK')" >&2; exit 2 ;;
+esac
+DEFINES="-DABSOLUTE_POINTER=$ABSOLUTE_POINTER -DBLE_LINK=$BLE_LINK"; [[ $DEBUG == 1 ]] && DEFINES+=" -DDEBUG_SERIAL=1"
 FLAGS=(--build-property "compiler.cpp.extra_flags=$DEFINES")
-echo "board: $FQBN  absolute pointer: $ABSOLUTE_POINTER  port: ${PORT:-none found}"
+echo "board: $FQBN  absolute pointer: $ABSOLUTE_POINTER  link: $([[ $BLE_LINK == 1 ]] && echo ble || echo wifi)  port: ${PORT:-none found}"
 
 arduino-cli compile -b "$FQBN" "${FLAGS[@]}" --output-dir build hid_bridge
 if [[ -z $PORT ]]; then

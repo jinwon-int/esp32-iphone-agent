@@ -31,8 +31,27 @@
 // and WG_* settings send the link through a WireGuard tunnel, so the board reaches the server from any Wi-Fi and the
 // link is encrypted on the way. With SERVER_HOST_HOME too, the board skips the tunnel on the first (home) Wi-Fi and
 // connects to that address directly. Without WG_* the board connects to SERVER_HOST directly, as before.
+//
+// BLE_LINK=1 (experimental) replaces Wi-Fi with Bluetooth LE: the controller is an app on the same phone instead of a
+// server, so the board needs no network at all. The board is a GATT peripheral with one service and two
+// characteristics -- the app writes bytes to RX, the board notifies bytes on TX -- and the very same lines go over it:
+// the same hello / challenge / auth handshake (why: reset reason + ",ble"), the same tags, the same commands. The board
+// says hello once the app subscribes to TX, and hangs up a central that does not subscribe or authenticate in time, so
+// a stranger in radio range cannot drive the phone or keep the one connection for long (but can take it again and
+// again: a denial of service). The link is not BLE-encrypted; like the Wi-Fi link without WireGuard, only the tags
+// protect it (commands, incl. typed text, are readable nearby). secrets.h needs only DEVICE_KEY in this build.
 
+#ifndef BLE_LINK
+#define BLE_LINK 0  // 1: Bluetooth LE link to an app on the phone, no Wi-Fi; 0: TCP over Wi-Fi to the server
+#endif
+
+#if BLE_LINK
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <freertos/stream_buffer.h>
+#else
 #include <WiFi.h>
+#endif
 #include <esp_random.h>
 #include <esp_task_wdt.h>
 #include <mbedtls/md.h>
@@ -43,7 +62,7 @@
 #include "tusb.h"
 #include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVER_HOST, SERVER_PORT, DEVICE_KEY (+ optional WIFI_SSID2, WG_*)
 
-#ifdef WG_PRIVATE_KEY
+#if defined(WG_PRIVATE_KEY) && !BLE_LINK
 #define USE_WIREGUARD 1
 #include <time.h>
 #include "lwip/tcpip.h"
@@ -95,6 +114,7 @@ USBHIDConsumerControl consumer;
 // Consumer-page keys Apple maps for keyboards (Accessory Design Guidelines, table 14-3). Not the library's
 // CONSUMER_CONTROL_HOME (0x0223, AC Home): Apple's Home Button is 0x0040 (Menu).
 const uint16_t CONSUMER_HOME = 0x0040, CONSUMER_SEARCH = 0x0221, CONSUMER_GLOBE = 0x029D, CONSUMER_KEYBOARD = 0x01AE;
+#if !BLE_LINK
 WiFiClient server;
 const unsigned long WIFI_SWITCH_MS = 15000;  // with WIFI_SSID2: try the other network after this long without Wi-Fi
 int wifiNet = 0;                             // 0 = WIFI_SSID, 1 = WIFI_SSID2
@@ -106,9 +126,106 @@ volatile unsigned long wifiJoinedAt = 0;
 // The last reason (esp_wifi WIFI_REASON_*, 0 = none) each network dropped the board, sent in the hello, so a drop
 // away from home can be read in the server log without a serial console (#65). Our own leave (a switch) is skipped.
 volatile uint8_t wifiDrop[2] = {0, 0};
+#endif
 String session;      // per-connection key from the handshake; empty while not authenticated
 uint32_t seq = 0;    // number of the next command in this session
 const unsigned MAX_LINE = 512;
+
+// The link to the controller, as a byte stream: TCP to the server, or the BLE pair of characteristics to the app.
+#if BLE_LINK
+const char *BLE_NAME = "HID Bridge";
+const char *BLE_SERVICE = "23c2efd6-8e20-4e1b-a71a-e26bc6d9320c";
+const char *BLE_RX = "aebdbe49-932f-4ce9-8d9d-ae64db99d2ed";  // app -> board: write (with or without response)
+const char *BLE_TX = "7f186178-861e-4e86-98e0-347e67454906";  // board -> app: notify
+const unsigned long BLE_SUBSCRIBE_MS = 5000;  // a central that does not subscribe to TX by then is dropped
+BLEServer *bleServer = nullptr;
+BLECharacteristic *bleTx = nullptr;
+StreamBufferHandle_t bleIn = nullptr;  // RX bytes: written by the BLE host task, read by loop() (one each way)
+// Set from the BLE host task. bleConnects counts connections, so loop() greets each connection once.
+volatile bool bleLinked = false, bleSubscribed = false, bleOverflow = false;
+volatile uint16_t bleConn = 0;
+volatile uint32_t bleConnects = 0;
+volatile unsigned long bleConnectedAt = 0;
+uint32_t bleGreeted = 0;     // the connection the board last said hello on (a count of bleConnects)
+uint16_t bleGreetedConn = 0;  // ... and its handle
+
+class BleServerEvents : public BLEServerCallbacks {
+  void onConnect(BLEServer *, ble_gap_conn_desc *desc) override {
+    bleConn = desc->conn_handle;
+    bleSubscribed = false;
+    bleConnectedAt = millis();
+    bleConnects++;
+    bleLinked = true;  // advertising stops: one central at a time
+  }
+  void onDisconnect(BLEServer *, ble_gap_conn_desc *) override {
+    bleLinked = false;
+    bleSubscribed = false;  // advertising restarts (advertiseOnDisconnect)
+  }
+};
+
+class BleRxEvents : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *c, ble_gap_conn_desc *) override {  // keep it short: runs in the BLE host task
+    size_t n = c->getLength();
+    if (xStreamBufferSend(bleIn, c->getData(), n, 0) != n) bleOverflow = true;  // loop() hangs up
+  }
+};
+
+class BleTxEvents : public BLECharacteristicCallbacks {
+  void onSubscribe(BLECharacteristic *, ble_gap_conn_desc *, uint16_t subValue) override {
+    bleSubscribed = subValue & 1;  // bit 0: notifications
+  }
+};
+
+void bleBegin() {
+  bleIn = xStreamBufferCreate(2 * MAX_LINE, 1);
+  BLEDevice::init(BLE_NAME);
+  bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new BleServerEvents());
+  bleServer->advertiseOnDisconnect(true);
+  BLEService *service = bleServer->createService(BLE_SERVICE);
+  BLECharacteristic *rx = service->createCharacteristic(
+      BLE_RX, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  rx->setCallbacks(new BleRxEvents());
+  bleTx = service->createCharacteristic(BLE_TX, BLECharacteristic::PROPERTY_NOTIFY);
+  bleTx->setCallbacks(new BleTxEvents());
+  service->start();
+  BLEAdvertising *adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(BLE_SERVICE);  // the app scans for this service; the name goes in the scan response
+  adv->setScanResponse(true);
+  BLEDevice::startAdvertising();
+}
+
+// Connected means: still the connection the board said hello on. A session never carries over to a new connection
+// that came in while loop() was busy (e.g. typing), so the new one gets its own hello, and nothing stays held down.
+bool linkConnected() { return bleLinked && bleSubscribed && bleGreeted == bleConnects; }
+size_t linkAvailable() { return xStreamBufferBytesAvailable(bleIn); }
+char linkRead() {
+  char c = 0;
+  xStreamBufferReceive(bleIn, &c, 1, 0);
+  return c;
+}
+void linkWrite(const String &s) {  // the library cuts a notification at MTU - 3 bytes, so send it in pieces
+  uint16_t mtu = bleServer->getPeerMTU(bleConn);
+  size_t piece = mtu > 23 ? mtu - 3 : 20;
+  for (size_t i = 0; i < s.length(); i += piece) {
+    bleTx->setValue((const uint8_t *)s.c_str() + i, min(piece, s.length() - i));
+    bleTx->notify();
+  }
+}
+void linkStop() {  // hang up the greeted connection only, never one that came in since
+  if (bleLinked && bleGreeted == bleConnects) bleServer->disconnect(bleGreetedConn);  // asynchronous: onDisconnect follows
+}
+void bleDrain() {  // empty the RX buffer as its one reader (xStreamBufferReset is not safe against a concurrent write)
+  uint8_t junk[64];
+  while (xStreamBufferReceive(bleIn, junk, sizeof junk, 0) > 0) {}
+}
+#else
+bool linkConnected() { return server.connected(); }
+size_t linkAvailable() { return server.available(); }
+char linkRead() { return server.read(); }
+void linkWrite(const String &s) { server.print(s); }
+void linkStop() { server.stop(); }
+#endif
 
 #if ABSOLUTE_POINTER
 void moveAbs(long x, long y, int8_t wheel = 0, int8_t pan = 0) {
@@ -300,7 +417,7 @@ String hex(const uint8_t *bytes, size_t n) {
   return out;
 }
 
-String nonce() {  // hardware RNG: truly random while Wi-Fi is on
+String nonce() {  // hardware RNG: truly random while the radio (Wi-Fi or Bluetooth) is on
   uint8_t bytes[16];
   esp_fill_random(bytes, sizeof bytes);
   return hex(bytes, sizeof bytes);
@@ -330,9 +447,9 @@ bool sameText(const String &a, const String &b) {  // constant time for equal le
 String readLine(unsigned long timeoutMs) {
   String line;
   unsigned long started = millis();
-  while (millis() - started < timeoutMs && server.connected()) {
-    while (server.available() && millis() - started < timeoutMs) {
-      char c = server.read();
+  while (millis() - started < timeoutMs && linkConnected()) {
+    while (linkAvailable() && millis() - started < timeoutMs) {
+      char c = linkRead();
       if (c == '\n') { line.trim(); return line; }
       if (line.length() >= MAX_LINE) return "";
       line += c;
@@ -358,14 +475,18 @@ const char *resetReason() {
 bool handshake() {
   String boardNonce = nonce();
   char why[48];  // no spaces: the server reads the hello as four words
+#if BLE_LINK
+  snprintf(why, sizeof why, "%s,ble", resetReason());
+#else
   snprintf(why, sizeof why, "%s,wifi=%u/%u", resetReason(), wifiDrop[0], wifiDrop[1]);
-  server.printf("hello %s %lu %s\n", why, millis(), boardNonce.c_str());
+#endif
+  linkWrite("hello " + String(why) + " " + String(millis()) + " " + boardNonce + "\n");
   String line = readLine(3000);  // "challenge <server nonce> <proof>"
   int sp = line.indexOf(' ', 10);
   if (!line.startsWith("challenge ") || sp != 42) return false;  // 10 + 32 hex digits
   String serverNonce = line.substring(10, sp);
   if (!sameText(line.substring(sp + 1), mac(DEVICE_KEY, "server", boardNonce, serverNonce))) return false;
-  server.printf("auth %s\n", mac(DEVICE_KEY, "board", serverNonce, boardNonce).c_str());
+  linkWrite("auth " + mac(DEVICE_KEY, "board", serverNonce, boardNonce) + "\n");
   esp_task_wdt_reset();
   if (readLine(3000) != "ok") return false;
   session = mac(DEVICE_KEY, "session", boardNonce, serverNonce);
@@ -378,9 +499,10 @@ void hangUp() {  // drop the link and anything held down; the loop reconnects
   keyboard.releaseAll();
   consumer.release();
   session = "";
-  server.stop();
+  linkStop();
 }
 
+#if !BLE_LINK
 void wifiBegin(int net) {
   wifiNet = net;
   wifiDownSince = millis();
@@ -413,6 +535,7 @@ bool wifiUp() {
 #endif
   return false;
 }
+#endif
 
 #if USE_WIREGUARD
 wireguard_config_t wgConfig = ESP_WIREGUARD_CONFIG_DEFAULT();
@@ -465,48 +588,91 @@ void setup() {
   consumer.begin();
   USB.productName("HID Bridge");
   USB.begin();
+#if BLE_LINK
+  bleBegin();
+#endif
   esp_task_wdt_config_t wdt = {.timeout_ms = WATCHDOG_MS, .idle_core_mask = 0, .trigger_panic = true};
   esp_task_wdt_reconfigure(&wdt);
   esp_task_wdt_add(NULL);
+#if !BLE_LINK
   WiFi.setHostname("hid-bridge");
   WiFi.setSleep(false);  // modem sleep adds ~100 ms per command
   WiFi.setAutoReconnect(true);
   WiFi.onEvent(onWifiEvent);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+#endif
 }
+
+void releaseAll() {  // a gesture cut off mid-way must not leave the button held (long press)
+  mouse.release(MOUSE_LEFT);
+  keyboard.releaseAll();
+  consumer.release();
+}
+
+// True once there is an authenticated link to the controller; otherwise works towards one and returns at once.
+#if BLE_LINK
+bool linkReady() {
+  if (bleOverflow) {  // more than the buffer in one go: an over-long line, never executed
+    bleOverflow = false;
+    hangUp();
+    return false;
+  }
+  if (linkConnected() && session.length()) return true;
+  releaseAll();
+  session = "";
+  if (bleLinked && bleSubscribed && bleGreeted != bleConnects) {  // a new connection, listening: say hello once
+    bleGreeted = bleConnects;
+    bleGreetedConn = bleConn;
+    bleDrain();  // nothing written before the hello counts
+    bleOverflow = false;
+    if (handshake()) return true;
+#if DEBUG_SERIAL
+    Serial.println("app failed the DEVICE_KEY handshake (wrong key or not our app): hanging up");
+#endif
+    hangUp();
+    return false;
+  }
+  // connected but not subscribed in time, unsubscribed, or refused: free the one connection for the app
+  if (bleLinked && millis() - bleConnectedAt > BLE_SUBSCRIBE_MS) bleServer->disconnect(bleConn);
+  delay(20);
+  return false;
+}
+#else
+bool linkReady() {
+  if (!wifiUp()) { mouse.release(MOUSE_LEFT); delay(50); return false; }  // auto-reconnects (or switches network)
+  if (server.connected()) return true;
+  releaseAll();
+  session = "";
+  const char *host = SERVER_HOST;
+#if USE_WIREGUARD
+#ifdef SERVER_HOST_HOME
+  if (wifiNet == 0) host = SERVER_HOST_HOME;  // on the first (home) Wi-Fi: straight to the server, no tunnel
+  else
+#endif
+  if (!tunnelUp()) { delay(100); return false; }  // SERVER_HOST is inside the tunnel
+#endif
+  if (!server.connect(host, SERVER_PORT, 1000)) { delay(200); return false; }  // retry fast: show up at once
+  server.setNoDelay(true);
+  if (!handshake()) {  // the hello also tells the server why the board last restarted, and its uptime
+#if DEBUG_SERIAL
+    Serial.println("server failed the DEVICE_KEY handshake (wrong key or not our server)");
+#endif
+    hangUp();
+    delay(1000);  // do not hammer a server that refuses us
+    return false;
+  }
+#if DEBUG_SERIAL
+  Serial.printf("connected to %s:%d as %s on %s after %lu ms\n", host, SERVER_PORT,
+                WiFi.localIP().toString().c_str(), WiFi.SSID().c_str(), millis());
+#endif
+  return true;
+}
+#endif
 
 void loop() {
   esp_task_wdt_reset();
-  if (!wifiUp()) { mouse.release(MOUSE_LEFT); delay(50); return; }  // auto-reconnects (or switches network)
-  if (!server.connected()) {
-    mouse.release(MOUSE_LEFT);  // a gesture cut off mid-way must not leave the button held (long press)
-    keyboard.releaseAll();
-    consumer.release();
-    session = "";
-    const char *host = SERVER_HOST;
-#if USE_WIREGUARD
-#ifdef SERVER_HOST_HOME
-    if (wifiNet == 0) host = SERVER_HOST_HOME;  // on the first (home) Wi-Fi: straight to the server, no tunnel
-    else
-#endif
-    if (!tunnelUp()) { delay(100); return; }  // SERVER_HOST is inside the tunnel
-#endif
-    if (!server.connect(host, SERVER_PORT, 1000)) { delay(200); return; }  // retry fast: show up at once
-    server.setNoDelay(true);
-    if (!handshake()) {  // the hello also tells the server why the board last restarted, and its uptime
-#if DEBUG_SERIAL
-      Serial.println("server failed the DEVICE_KEY handshake (wrong key or not our server)");
-#endif
-      hangUp();
-      delay(1000);  // do not hammer a server that refuses us
-      return;
-    }
-#if DEBUG_SERIAL
-    Serial.printf("connected to %s:%d as %s on %s after %lu ms\n", host, SERVER_PORT,
-                  WiFi.localIP().toString().c_str(), WiFi.SSID().c_str(), millis());
-#endif
-  }
-  if (server.available()) {
+  if (!linkReady()) return;
+  if (linkAvailable()) {
     String line = readLine(1000);
     int sp = line.lastIndexOf(' ');
     // no tag, a wrong tag (not our session, replayed, reordered) or an over-long line: hang up, never execute
@@ -522,7 +688,7 @@ void loop() {
     unsigned long started = millis();
 #endif
     String reply = run(command);
-    server.print(reply + " " + tag("reply", reply) + "\n");
+    linkWrite(reply + " " + tag("reply", reply) + "\n");
     seq++;
 #if DEBUG_SERIAL
     Serial.printf("%s -> %s (%lu ms)\n", command.c_str(), reply.c_str(), millis() - started);
