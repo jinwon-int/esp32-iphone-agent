@@ -343,6 +343,17 @@ fails the handshake, sends a bad tag or a line over 512 bytes, or has more than 
 and the board advertises again. A session belongs to one connection: a new connection always gets a new hello, and
 losing the connection releases all buttons, like a dropped TCP link.
 
+To try such a board before there is an app, drive it from a computer with Bluetooth (Linux needs BlueZ running):
+
+```bash
+cd server && pip install -e ".[ble]"
+DEVICE_KEY=<same as in secrets.h> python -m hidagent.ble              # then type commands: ping, move 100 0, click …
+DEVICE_KEY=<same as in secrets.h> python -m hidagent.ble --bench 50   # round-trip time of 50 pings, p50 / p90 / max
+```
+
+It finds the board by its service, runs the same handshake as the server (`hidagent.device.Device` over the BLE
+stream, `hidagent/ble.py`), and sends one command per line.
+
 ## Project layout
 
 ```
