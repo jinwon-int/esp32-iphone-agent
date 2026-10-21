@@ -152,6 +152,7 @@ ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x",
            "home": (), "back": (), "wait": (), "replan": (), "note": ("text",), "spotlight": ("text",)}
 TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the last step to the user
 NOTES_MAX = 8  # facts the actor keeps across rounds (the newest stay); a note never reaches the phone
+SPOTLIGHT_SETTLE = {"most": 1.5}  # Spotlight's suggestions keep moving: never wait the full settle (4 s seen on device)
 NOTE_CHARS = 120
 TEXT_ARGS = ("text", "combo", "answer", "reason")
 
@@ -406,7 +407,7 @@ class Agent:
                 if not vision.changed(seen, self.screen.frame, ignore=tuple(spots)):
                     self.steps[-1]["changed"] = False
                     return False  # skip the rest; the actor looks again
-        await self._settle()
+        await self._settle(**(SPOTLIGHT_SETTLE if acts[i]["action"] == "spotlight" else {}))  # i: the last action run
         # feedback for the next round
         self.steps[-1]["changed"] = vision.changed(seen, self.screen.frame, ignore=tuple(spots))
         return False
@@ -439,13 +440,14 @@ class Agent:
                      reason=" ".join(m.group(2).split())[:300], think_s=seconds)
         return False
 
-    async def _settle(self) -> None:
+    async def _settle(self, **overrides: float) -> None:
         """Wait for the screen to stop changing and note on the last step how long that took and whether it did.
 
         Measurement only (never shown to the actor or the gate): ``settle_s`` is the wait, ``stable`` False when
         the screen was still changing when the wait gave up, e.g. a loading screen the next decision was made on.
+        ``overrides``: SETTLE_* values for this wait only (a screen that never settles, like Spotlight).
         """
-        result = await self.screen.settled(since=self._acted_at, **self.settle)
+        result = await self.screen.settled(since=self._acted_at, **{**self.settle, **overrides})
         if isinstance(result, tuple) and self.steps:
             self.steps[-1]["settle_s"], self.steps[-1]["stable"] = result
 
@@ -624,9 +626,9 @@ class Agent:
             case "type": await self.phone.type(a["text"])
             case "spotlight":  # home, Spotlight, clear, type: one round instead of four (#74 M5-1)
                 await self.phone.go_home()
-                await self.screen.settled(since=self._acted_at, **self.settle)
+                await self.screen.settled(since=self._acted_at, **{**self.settle, **SPOTLIGHT_SETTLE})
                 await self.phone.swipe(*SPOTLIGHT_SWIPE[0], *SPOTLIGHT_SWIPE[1])
-                await self.screen.settled(since=self._acted_at, **self.settle)
+                await self.screen.settled(since=self._acted_at, **{**self.settle, **SPOTLIGHT_SETTLE})
                 await self.phone.key("cmd+a")
                 await self.phone.key("backspace")
                 await self.phone.type(a["text"])

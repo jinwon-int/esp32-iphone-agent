@@ -992,3 +992,35 @@ def test_pointer_path_ends_at_park_for_gestures_on_an_absolute_pointer():
     assert _pointer_path({"action": "path", "points": [[0, 0], [10, 10]]}, park=PARK) == [(0, 0), (0.01, 0.01), PARK]
     assert _pointer_path({"action": "home"}, park=PARK)[-1] != PARK  # home is not a pointer gesture
     assert _pointer_path({"action": "tap", "x": 500, "y": 300}) == [(0.5, 0.3)]  # relative pointer: no park
+
+
+def test_spotlight_never_waits_the_full_settle():
+    import asyncio
+
+    from hidagent.agent import SPOTLIGHT_SETTLE, Agent
+    from hidagent.debug import Trace
+
+    waits = []
+
+    class Phone:
+        async def go_home(self): pass
+        async def swipe(self, *a, **k): pass
+        async def key(self, combo): pass
+        async def type(self, text): pass
+
+    class Screen:
+        live, frame = True, b"f"
+
+        async def settled(self, since=None, **kw):
+            waits.append(kw)
+            return 0.1, True
+
+    agent = Agent(phone=Phone(), screen=Screen(), actor=None, planner=None, trace=Trace(None), settle={"quiet": 0.3})
+    asyncio.run(agent._do({"action": "spotlight", "text": "시계"}))
+    assert waits == [{"quiet": 0.3, "most": 1.5}, {"quiet": 0.3, "most": 1.5}] and SPOTLIGHT_SETTLE == {"most": 1.5}
+    waits.clear()
+    agent.steps.append({"action": "spotlight", "text": "시계"})
+    asyncio.run(agent._settle(**SPOTLIGHT_SETTLE))
+    assert waits == [{"quiet": 0.3, "most": 1.5}] and agent.steps[-1]["settle_s"] == 0.1
+    asyncio.run(agent._settle())
+    assert waits[-1] == {"quiet": 0.3}
