@@ -16,6 +16,7 @@ import math
 import os
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,6 +134,10 @@ class HomeVia:
         if self.button is None:
             return list(HOME_SWIPE)
         return [self.button] + ([self.menu_home] if self.menu_home else [])
+
+
+class GuardStop(RuntimeError):
+    """A drag's guard found a menu under the press (phone.drag guard): the item was never carried."""
 
 
 class Phone:
@@ -354,7 +359,7 @@ class Phone:
 
     async def drag(self, points: list[tuple[float, float]], hold: bool = True, pick: float = 0.0,
                    rest: float | None = None, aim: bool = False, stops: list[float] | None = None,
-                   lift: float = 0.0) -> None:
+                   lift: float = 0.0, guard: Callable[[], Awaitable[bool]] | None = None) -> None:
         """Press at the first point, move through the rest, release: one continuous stroke.
 
         hold=True rests at the end first, so lists and pickers stop exactly there instead of flinging on.
@@ -366,7 +371,8 @@ class Phone:
         ``stops``: seconds to rest at each point between the first and the last (one per via point), e.g. at the
         screen edge until iOS turns the page while an icon is held. ``lift``: seconds over which the first
         LIFT_DIST of the way is covered slowly, right after ``pick`` (iOS 27 kept the item's menu open when the
-        pointer raced off at once, #35).
+        pointer raced off at once, #35). ``guard``: awaited after ``pick``; True means a menu opened under the press
+        (#35, #74 M8): the button is released where it is, nothing is carried, and GuardStop is raised.
         """
         if stops is not None and len(stops) != len(points) - 2:
             raise ValueError(f"stops needs one rest per via point: {len(points) - 2}, got {len(stops)}")
@@ -375,6 +381,8 @@ class Phone:
         try:
             if pick:
                 await asyncio.sleep(pick)
+            if guard is not None and await guard():
+                raise GuardStop("a menu opened under the press: released in place, nothing moved")
             last = points[0]
             if lift and len(points) > 1:
                 last = await self._lift(points[0], points[1], lift)

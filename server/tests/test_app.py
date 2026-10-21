@@ -216,7 +216,7 @@ def test_longpress_and_drag_endpoints(web, monkeypatch):
         async def long_press(self, x, y, seconds=1.0, aim=False):
             calls.append(("long_press", x, y, seconds))
 
-        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0):
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0, guard=None):
             calls.append(("drag", points, pick, rest, aim) + ((stops, lift) if stops or lift else ()))
 
     monkeypatch.setattr(module, "screen", FakeScreen())
@@ -263,7 +263,7 @@ def test_drag_endpoint_passes_via_points_and_lift(web, monkeypatch):
             return 0.3, True
 
     class FakePhone:
-        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0):
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0, guard=None):
             calls.append((points, pick, rest, stops, lift))
 
     monkeypatch.setattr(module, "screen", FakeScreen())
