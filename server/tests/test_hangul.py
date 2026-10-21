@@ -89,3 +89,17 @@ def test_actor_prompt_explains_input_language_and_fast_clearing():
     assert "English, Korean or both" in ACTOR_PROMPT and "key ctrl+space" in ACTOR_PROMPT
     assert "cmd+a then key backspace" in ACTOR_PROMPT
     assert "the keyboard is showing" not in ACTOR_PROMPT  # with a hardware keyboard the on-screen one stays hidden
+
+
+def test_absolute_pointer_parks_after_a_tap_and_a_drag_not_after_typing(tmp_path):
+    from hidagent.phone import ABS_MAX, PARK
+    phone = make_phone(tmp_path)
+    asyncio.run(phone.tap(0.5, 0.5))
+    park = f"at {round(PARK[0] * ABS_MAX)} {round(PARK[1] * ABS_MAX)}"
+    assert phone.device.sent[-2:] == ["click", park]
+    phone.device.sent.clear()
+    asyncio.run(phone.swipe(0.5, 0.8, 0.5, 0.5))
+    assert phone.device.sent[-2:] == ["release", park]
+    phone.device.sent.clear()
+    asyncio.run(phone.type("abc"))
+    assert phone.device.sent == ["type abc"]

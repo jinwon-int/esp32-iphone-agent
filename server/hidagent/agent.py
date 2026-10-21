@@ -14,7 +14,7 @@ from .device import DeviceError
 from .gate import Gate
 from .gate import describe as gate_describe
 from .llm import LLM, image_size, shrink
-from .phone import DROP, HOME_SWIPE, LIFT, PICK_UP, SPOTLIGHT_SWIPE, Phone
+from .phone import DROP, HOME_SWIPE, LIFT, PARK, PICK_UP, SPOTLIGHT_SWIPE, Phone
 from .screen import Screen
 
 log = logging.getLogger(__name__)
@@ -385,7 +385,8 @@ class Agent:
                 started = self._acted_at = time.time()
                 await self._do(act)
                 act["act_s"] = round(time.time() - started, 2)
-                spots += _pointer_path(act, getattr(getattr(self.phone, "home", None), "path", None))
+                spots += _pointer_path(act, getattr(getattr(self.phone, "home", None), "path", None),
+                                       PARK if getattr(self.phone, "absolute", False) else None)
                 self._pointer = spots[-1]
             if name == "done":
                 before = self._rejected
@@ -636,14 +637,17 @@ class Agent:
             case other: raise ValueError(f"unknown action {other!r}")
 
 
-def _pointer_path(act: dict, home: list[tuple[float, float]] | None = None) -> list[tuple[float, float]]:
-    """Screen points (fractions) the pointer passes through for one action; home: the phone's way home."""
+def _pointer_path(act: dict, home: list[tuple[float, float]] | None = None,
+                  park: tuple[float, float] | None = None) -> list[tuple[float, float]]:
+    """Screen points (fractions) the pointer passes through for one action; home: the phone's way home; park: where
+    the absolute pointer goes after a gesture (Phone.PARK), so that spot is not read as a screen change."""
     f = lambda x, y: (x / 1000, y / 1000)  # noqa: E731
+    after = [park] if park else []
     match act["action"]:
-        case "tap" | "longpress": return [f(act["x"], act["y"])]
-        case "swipe" | "drag": return [f(act["x1"], act["y1"]), f(act["x2"], act["y2"])]
-        case "path": return [f(*p) for p in act["points"]]
-        case "circle": return [f(act["x"] + act["r"], act["y"])]
+        case "tap" | "longpress": return [f(act["x"], act["y"]), *after]
+        case "swipe" | "drag": return [f(act["x1"], act["y1"]), f(act["x2"], act["y2"]), *after]
+        case "path": return [f(*p) for p in act["points"]] + after
+        case "circle": return [f(act["x"] + act["r"], act["y"]), *after]
         case "home": return list(HOME_SWIPE if home is None else home)
         case "spotlight": return [*(HOME_SWIPE if home is None else home), *SPOTLIGHT_SWIPE]
         case "back": return [(0.005, 0.45), (0.6, 0.45)]

@@ -981,3 +981,14 @@ def test_spotlight_is_home_pull_down_clear_and_type_in_one_action():
                      ("settled", True), ("key", "cmd+a"), ("key", "backspace"), ("type", "교보eBook")]
     assert _pointer_path({"action": "spotlight", "text": "x"}) == [*HOME_SWIPE, *SPOTLIGHT_SWIPE]
     assert _pointer_path({"action": "spotlight", "text": "x"}, home=[(0.1, 0.2)]) == [(0.1, 0.2), *SPOTLIGHT_SWIPE]
+
+
+def test_pointer_path_ends_at_park_for_gestures_on_an_absolute_pointer():
+    from hidagent.agent import _pointer_path
+    from hidagent.phone import PARK
+
+    assert _pointer_path({"action": "tap", "x": 500, "y": 300}, park=PARK) == [(0.5, 0.3), PARK]
+    assert _pointer_path({"action": "drag", "x1": 0, "y1": 0, "x2": 1000, "y2": 1000}, park=PARK)[-1] == PARK
+    assert _pointer_path({"action": "path", "points": [[0, 0], [10, 10]]}, park=PARK) == [(0, 0), (0.01, 0.01), PARK]
+    assert _pointer_path({"action": "home"}, park=PARK)[-1] != PARK  # home is not a pointer gesture
+    assert _pointer_path({"action": "tap", "x": 500, "y": 300}) == [(0.5, 0.3)]  # relative pointer: no park
