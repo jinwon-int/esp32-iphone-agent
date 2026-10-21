@@ -14,7 +14,7 @@ from .device import DeviceError
 from .gate import Gate
 from .gate import describe as gate_describe
 from .llm import LLM, image_size, shrink
-from .phone import DROP, HOME_SWIPE, LIFT, PICK_UP, Phone
+from .phone import DROP, HOME_SWIPE, LIFT, PICK_UP, SPOTLIGHT_SWIPE, Phone
 from .screen import Screen
 
 log = logging.getLogger(__name__)
@@ -25,8 +25,8 @@ Plan only what the goal needs, from what you can see; never invent accounts, ema
 screens you have not seen. Later steps can stay general (e.g. "Draw the face on the canvas").
 When a later step depends on something that has to be found first (a folder, a row, a setting), say so,
 so that where it is gets noted once found.
-To open an app, prefer search over paging through home screens: tap the "Search" pill above
-the dock (or swipe down from the middle of the home screen), type the app name, tap the result.
+To open an app, use the spotlight action (home, Spotlight and the name typed in one action), then
+tap the result; never page through home screens looking for it.
 If the goal involves paying or buying, sending a message or email, deleting the user's own items
 (messages, notes, photos, cart items), or changing account or security settings, plan up to the
 final review screen and end the plan with "stop for the user to confirm": the user does the last tap."""
@@ -40,10 +40,10 @@ DO: <action>
 Give several DO lines (up to 6, run in order) whenever the next actions do not depend on seeing the
 result: e.g. ticking several visible checkboxes or days, several drawing strokes, clearing a field then typing.
 Give ONE DO line when the next action depends on what this one opens or changes.
-A type action always ends the reply (anything after it is not run): read the typed text on the next screenshot
-before pressing enter. done is always alone in its reply, after a screenshot that shows the result. A second
-look checks every done against the screen; a "check" with verdict "no" in your recent actions names what is
-still wrong: fix that, then say done again.
+A type or spotlight action always ends the reply (anything after it is not run): read the typed text on the
+next screenshot before pressing enter. done is always alone in its reply, after a screenshot that shows the
+result. A second look checks every done against the screen; a "check" with verdict "no" in your recent actions
+names what is still wrong: fix that, then say done again.
 The screenshot is always the current screen: never assume it is outdated. If it does not show the goal reached,
 the goal is not reached yet.
 Never tap or long press the Dynamic Island or the status bar at the very top (the top 6 % of the screenshot):
@@ -116,6 +116,9 @@ Actions:
                              reply, not backspace again and again
   home | back | wait
   replan                    (the plan no longer fits the screen)
+  spotlight TEXT            (go home, open Spotlight, clear its field and type TEXT: one action instead of four.
+                             The next screenshot shows the results; then tap or drag the top result. TEXT may mix
+                             Korean and English)
   note TEXT                 (keep a fact for later rounds: where something is, a name you read, what already
                              worked. It comes back to you under Notes every round. Its own DO line before the
                              action it belongs to; short; at most one per reply; nothing happens on the phone)
@@ -146,7 +149,7 @@ META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "chan
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
            "longpress": ("x", "y"), "drag": ("x1", "y1", "x2", "y2"),
            "type": ("text",), "key": ("combo",), "done": ("answer",), "fail": ("reason",), "confirm": ("reason",),
-           "home": (), "back": (), "wait": (), "replan": (), "note": ("text",)}
+           "home": (), "back": (), "wait": (), "replan": (), "note": ("text",), "spotlight": ("text",)}
 TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the last step to the user
 NOTES_MAX = 8  # facts the actor keeps across rounds (the newest stay); a note never reaches the phone
 NOTE_CHARS = 120
@@ -394,7 +397,7 @@ class Agent:
                 self._attach(check, len(self.steps) - 1)
             if name in TERMINAL:
                 return True
-            if name == "type":  # the text may come out in the other alphabet: look before enter (#36, "skfTl")
+            if name in ("type", "spotlight"):  # the text may come out in the other alphabet: look before enter (#36)
                 break
             following = acts[i + 1]["action"] if i < len(acts) - 1 else None
             if name == "tap" and following in ("type", "key"):  # typing into a field that a missed tap never opened
@@ -618,6 +621,14 @@ class Agent:
             case "path": await self.phone.drag([(x / 1000, y / 1000) for x, y in a["points"]])
             case "circle": await self.phone.drag(circle(p("x"), p("y"), p("r"), self.screen.aspect))
             case "type": await self.phone.type(a["text"])
+            case "spotlight":  # home, Spotlight, clear, type: one round instead of four (#74 M5-1)
+                await self.phone.go_home()
+                await self.screen.settled(since=self._acted_at, **self.settle)
+                await self.phone.swipe(*SPOTLIGHT_SWIPE[0], *SPOTLIGHT_SWIPE[1])
+                await self.screen.settled(since=self._acted_at, **self.settle)
+                await self.phone.key("cmd+a")
+                await self.phone.key("backspace")
+                await self.phone.type(a["text"])
             case "key": await self.phone.key(a["combo"])
             case "home": await self.phone.go_home()
             case "back": await self.phone.go_back()
@@ -634,6 +645,7 @@ def _pointer_path(act: dict, home: list[tuple[float, float]] | None = None) -> l
         case "path": return [f(*p) for p in act["points"]]
         case "circle": return [f(act["x"] + act["r"], act["y"])]
         case "home": return list(HOME_SWIPE if home is None else home)
+        case "spotlight": return [*(HOME_SWIPE if home is None else home), *SPOTLIGHT_SWIPE]
         case "back": return [(0.005, 0.45), (0.6, 0.45)]
         case _: return []
 
