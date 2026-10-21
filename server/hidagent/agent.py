@@ -143,7 +143,7 @@ still being edited. Name what is wrong so the agent can fix it."""
 MAX_REJECTED = 2  # done is sent back at most this often per run; the next done is taken, marked unverified
 
 META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed", "settle_s", "stable",
-        "ocr_s", "gate")  # not the action
+        "ocr_s", "gate", "guard_change")  # not the action
 
 # action name -> argument names; numeric arguments are stored as 0-1000 of each screen axis (the actor gives pixels)
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
@@ -153,6 +153,9 @@ ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x",
 TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the last step to the user
 NOTES_MAX = 8  # facts the actor keeps across rounds (the newest stay); a note never reaches the phone
 SPOTLIGHT_SETTLE = {"most": 1.5}  # Spotlight's suggestions keep moving: never wait the full settle (4 s seen on device)
+DRAG_GUARD = os.environ.get("DRAG_GUARD", "observe").strip().lower() or "observe"  # off | observe | apply (#74 M8)
+MENU_LOOK = 0.3      # seconds after the pick before the guard looks (a quick-action menu takes a moment to draw)
+MENU_CHANGE = 12.0   # vision.page_change above this after the pick = a menu blurred the screen (an icon lift < 10)
 NOTE_CHARS = 120
 TEXT_ARGS = ("text", "combo", "answer", "reason")
 
@@ -558,7 +561,7 @@ class Agent:
         # actions and their effect only: echoing earlier thoughts makes the model repeat them instead of looking
         # ("gate" too: in observe mode the gate's opinion must not reach the actor and change what it does)
         hidden = ("t", "plan", "plan_zh", "think_s", "act_s", "shot", "thought", "thought_zh", "changed", "settle_s",
-                  "stable", "ocr_s", "gate")
+                  "stable", "ocr_s", "gate", "guard_change")
         effect = {True: " -> screen changed", False: " -> screen did NOT change"}
         size = self._shown_size()  # the actor's unit is pixels of this; None (unreadable frame): taken as 1000x1000
         history = "\n".join(json.dumps(_in_pixels({k: v for k, v in s.items() if k not in hidden}, size))[:300]
@@ -612,6 +615,23 @@ class Agent:
             log.warning("OCR skipped: %s", str(e)[:120])
             return ""
 
+    def _drag_guard(self, a: dict):
+        """The drag's menu guard (#35, #74 M8): after the pick, how much did the screen change? A quick-action menu
+        blurs the whole screen (page_change well above a lifted icon's). observe (default) records it on the step as
+        guard_change; apply also stops the drag above MENU_CHANGE — released in place, the actor sees the menu next.
+        Measured values from observe runs set the threshold before apply is ever on."""
+        if DRAG_GUARD == "off" or self.screen is None:
+            return None
+        before = self.screen.frame
+
+        async def guard() -> bool:
+            await asyncio.sleep(MENU_LOOK)
+            change = vision.page_change(before, self.screen.frame)
+            a["guard_change"] = round(change, 1)
+            return DRAG_GUARD == "apply" and change > MENU_CHANGE
+
+        return guard
+
     async def _do(self, a: dict) -> None:
         p = lambda k: a[k] / 1000  # noqa: E731
         match a["action"]:
@@ -620,7 +640,7 @@ class Agent:
             case "longpress": await self.phone.long_press(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
             case "drag":  # lift the item, carry it, rest on the target; aim first: picking the wrong icon costs more
                 await self.phone.drag([(p("x1"), p("y1")), (p("x2"), p("y2"))], pick=PICK_UP, rest=DROP, aim=True,
-                                      lift=LIFT)
+                                      lift=LIFT, guard=self._drag_guard(a))
             case "path": await self.phone.drag([(x / 1000, y / 1000) for x, y in a["points"]])
             case "circle": await self.phone.drag(circle(p("x"), p("y"), p("r"), self.screen.aspect))
             case "type": await self.phone.type(a["text"])

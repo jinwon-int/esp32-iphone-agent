@@ -548,7 +548,7 @@ def test_longpress_and_drag_reach_the_phone():
         async def long_press(self, x, y, aim=False):
             calls.append(("long_press", x, y, aim))
 
-        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0):
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0, guard=None):
             calls.append(("drag", points, pick, rest, aim, lift))
 
     agent = Agent(phone=Phone(), screen=None, actor=None, planner=None, trace=Trace(None))
@@ -1024,3 +1024,46 @@ def test_spotlight_never_waits_the_full_settle():
     assert waits == [{"quiet": 0.3, "most": 1.5}] and agent.steps[-1]["settle_s"] == 0.1
     asyncio.run(agent._settle())
     assert waits[-1] == {"quiet": 0.3}
+def test_drag_guard_observes_by_default_and_stops_only_in_apply(monkeypatch, tmp_path):
+    import asyncio
+
+    from hidagent import agent as agent_mod
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+    from hidagent.phone import GuardStop, Phone
+
+    class Screen:
+        live = True
+        frames = [b"a", b"b"]
+
+        @property
+        def frame(self):
+            return self.frames[0] if len(self.frames) == 1 else self.frames.pop(0)
+
+    monkeypatch.setattr(agent_mod.vision, "page_change", lambda before, after: 30.0 if before != after else 0.0)
+    monkeypatch.setattr(agent_mod, "MENU_LOOK", 0)
+    ag = Agent(phone=None, screen=Screen(), actor=None, planner=None, trace=Trace(None))
+    act = {"action": "drag", "x1": 100, "y1": 100, "x2": 600, "y2": 600}
+    guard = ag._drag_guard(act)
+    assert asyncio.run(guard()) is False and act["guard_change"] == 30.0  # observe: measured, never stops
+    monkeypatch.setattr(agent_mod, "DRAG_GUARD", "apply")
+    ag.screen.frames = [b"a", b"b"]
+    assert asyncio.run(ag._drag_guard(act)()) is True  # apply: a menu-sized change stops the drag
+    monkeypatch.setattr(agent_mod, "DRAG_GUARD", "off")
+    assert ag._drag_guard(act) is None
+
+    class Device:
+        sent = []
+
+        async def send(self, command):
+            self.sent.append(command)
+
+    phone = Phone(Device(), tmp_path / "cal.json", pointer="absolute")
+
+    async def tripped():
+        return True
+
+    with pytest.raises(GuardStop):
+        asyncio.run(phone.drag([(0.2, 0.2), (0.6, 0.6)], pick=0.0, guard=tripped))
+    assert phone.device.sent[-1] == "release"  # released in place, nothing carried
+    assert not any(c.startswith("at 19660") for c in phone.device.sent)  # never reached the target (0.6 * 32767)
