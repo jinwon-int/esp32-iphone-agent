@@ -33,8 +33,12 @@ EDGE = 0.06             # screen fraction; after a gesture this close to an edge
 HOLD = 0.25             # seconds to rest before lifting, so iOS adds no momentum (the swipe stops where it ends)
 TAP_GAP = 0.15          # seconds to stay still after a click, so iOS sees a finished tap, not the start of a drag
 LONG_PRESS = 1.0        # seconds the button stays down for a long press (context menus, Home Screen edit mode)
-PICK_UP = 0.8           # seconds a drag holds still after pressing, so iOS lifts the item (an icon, a list row)
-DROP = 1.0              # seconds a lifted item rests on its target before it is let go (icon on icon = a folder)
+PICK_UP = 0.5           # seconds a drag holds still after pressing, so iOS lifts the item (an icon, a list row)
+LIFT = 0.6              # seconds the agent's drag then covers the first LIFT_DIST slowly (see Phone.drag ``lift``)
+DROP = 1.2              # seconds a lifted item rests on its target before it is let go (icon on icon = a folder;
+                        # icon on a folder = into it). Device 2026-10-17 (#35): with the absolute pointer, pick 0.5
+                        # + lift 0.6 + rest 1.2 dropped into folders 9/9; the earlier 0.8 / no lift / 1.0 missed
+                        # existing folders (the item was set down beside them: app 2026-10-21, 0/7)
 NUDGE = 12              # mouse units the pointer is wiggled by to find it on screen
 AIM_TOLERANCE = 0.008   # screen fraction; a bigger miss is corrected before pressing
 MAX_MISS = 0.06         # bigger misses are still corrected, but not learned from (they may be misreadings)

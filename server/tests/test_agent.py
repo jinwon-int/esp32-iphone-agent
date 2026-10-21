@@ -540,7 +540,7 @@ def test_longpress_and_drag_reach_the_phone():
 
     from hidagent.agent import Agent
     from hidagent.debug import Trace
-    from hidagent.phone import DROP, PICK_UP
+    from hidagent.phone import DROP, LIFT, PICK_UP
 
     calls = []
 
@@ -548,15 +548,16 @@ def test_longpress_and_drag_reach_the_phone():
         async def long_press(self, x, y, aim=False):
             calls.append(("long_press", x, y, aim))
 
-        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False):
-            calls.append(("drag", points, pick, rest, aim))
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0):
+            calls.append(("drag", points, pick, rest, aim, lift))
 
     agent = Agent(phone=Phone(), screen=None, actor=None, planner=None, trace=Trace(None))
     asyncio.run(agent._do({"action": "longpress", "x": 500, "y": 300}))
     asyncio.run(agent._do({"action": "drag", "x1": 150, "y1": 350, "x2": 400, "y2": 350}))
     assert calls[0] == ("long_press", 0.5, 0.3, False)
-    # an item is lifted, carried and rested on its target; the pick-up point is aimed, the wrong icon costs more
-    assert calls[1] == ("drag", [(0.15, 0.35), (0.4, 0.35)], PICK_UP, DROP, True)
+    # an item is lifted slowly, carried and rested on its target; the pick-up point is aimed, the wrong icon costs more
+    assert calls[1] == ("drag", [(0.15, 0.35), (0.4, 0.35)], PICK_UP, DROP, True, LIFT)
+    assert (PICK_UP, LIFT, DROP) == (0.5, 0.6, 1.2)  # the timings that put items into folders (#35 device runs)
 
 
 def test_longpress_and_drag_pointer_paths():

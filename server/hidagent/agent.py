@@ -14,7 +14,7 @@ from .device import DeviceError
 from .gate import Gate
 from .gate import describe as gate_describe
 from .llm import LLM, image_size, shrink
-from .phone import DROP, HOME_SWIPE, PICK_UP, Phone
+from .phone import DROP, HOME_SWIPE, LIFT, PICK_UP, Phone
 from .screen import Screen
 
 log = logging.getLogger(__name__)
@@ -547,7 +547,8 @@ class Agent:
             case "swipe": await self.phone.swipe(p("x1"), p("y1"), p("x2"), p("y2"))
             case "longpress": await self.phone.long_press(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
             case "drag":  # lift the item, carry it, rest on the target; aim first: picking the wrong icon costs more
-                await self.phone.drag([(p("x1"), p("y1")), (p("x2"), p("y2"))], pick=PICK_UP, rest=DROP, aim=True)
+                await self.phone.drag([(p("x1"), p("y1")), (p("x2"), p("y2"))], pick=PICK_UP, rest=DROP, aim=True,
+                                      lift=LIFT)
             case "path": await self.phone.drag([(x / 1000, y / 1000) for x, y in a["points"]])
             case "circle": await self.phone.drag(circle(p("x"), p("y"), p("r"), self.screen.aspect))
             case "type": await self.phone.type(a["text"])
