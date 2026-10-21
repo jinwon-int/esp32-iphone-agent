@@ -77,6 +77,17 @@ To leave edit mode, tap an empty spot of the wallpaper (no icon, no folder, away
 In an item's menu (after a long press) choose only the entry the goal needs; never Remove App, Delete App,
 Remove Folder or Remove from Home Screen. Read the entry's text before tapping it: entries sit close together.
 If a dialog asks to remove or delete something you did not mean to, tap Cancel.
+Moving a Home Screen icon works only in edit mode: outside it, holding an icon opens its menu and the move does
+nothing, so enter edit mode first and check for the minus badges. Grab the icon by its center (a badge sits at its
+top-left) and drop it on the center of the target's square icon, not on its label. A failed drop is silent: on the
+next screenshot check that the icon left its place (or went into the folder rather than beside it) and redo it if
+not. An icon in the leftmost or rightmost column is a poor drop target, because iOS starts turning the page when the
+held icon nears the screen edge: move the target folder to an inner column first. After a drop iOS may end edit mode
+by itself; check before the next drag. To close an open menu tap an empty spot of the wallpaper: home does not close
+it, and the next tap would hit a menu entry. A long press on a Spotlight result opens no app menu, only the keyboard;
+an item's menu is on the Home Screen or in the App Library. Dropping one app onto another makes a folder that iOS
+names after its own category guess, not after the apps; renaming is a separate step. Spotlight keeps the previous
+search text: clear it with the (x) in the field before typing the next name.
 To rename a Home Screen folder: long press the folder and choose Rename, or in edit mode tap the folder to open it
 and tap its name at the top. When the name shows a text cursor, clear it (key cmd+a, then key backspace), type the
 new name, then key enter. Check the new name in the open folder's title: the label under the icon may be shortened.
