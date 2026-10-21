@@ -16,6 +16,8 @@ class FakeDevice:
     async def send(self, command):
         self.sent.append(command)
 
+PARK_AT = "at 492 16384"  # phone.PARK (0.015, 0.5) as an absolute report: where the pointer parks after a gesture
+
 
 def make_phone(tmp_path, home=None, pointer="relative", calibrated=True):
     calibration = tmp_path / "calibration.json"
@@ -79,7 +81,7 @@ def test_absolute_pointer_needs_no_calibration_and_taps_in_place(tmp_path):
     assert phone.calibrated
     assert asyncio.run(phone.start_calibration()) is True and device.sent == []
     asyncio.run(phone.tap(0.5, 0.25, aim=True))  # nothing to aim: no wiggle, no homing
-    assert device.sent == [f"at {round(0.5 * ABS_MAX)} {round(0.25 * ABS_MAX)}", "click"]
+    assert device.sent == [f"at {round(0.5 * ABS_MAX)} {round(0.25 * ABS_MAX)}", "click", PARK_AT]  # then it parks
 
 
 def test_absolute_pointer_clamps_to_the_screen(tmp_path):
@@ -93,9 +95,9 @@ def test_absolute_drag_glides_in_small_steps(tmp_path, monkeypatch):
     phone, device = make_phone(tmp_path, pointer="absolute")
     asyncio.run(phone.swipe(0.5, 0.8, 0.5, 0.5, hold=False))
     ats = [c for c in device.sent if c.startswith("at")]
-    assert device.sent[1] == "press" and device.sent[-1] == "release"
-    assert len(ats) == 1 + 10  # start, then 0.3 of the screen in 0.03 steps
-    assert ats[-1] == f"at {round(0.5 * ABS_MAX)} {round(0.5 * ABS_MAX)}"
+    assert device.sent[1] == "press" and device.sent[-2:] == ["release", PARK_AT]
+    assert len(ats) == 1 + 10 + 1  # start, then 0.3 of the screen in 0.03 steps, then the park
+    assert ats[-2] == f"at {round(0.5 * ABS_MAX)} {round(0.5 * ABS_MAX)}" and ats[-1] == PARK_AT
     assert not any(c.startswith(("move", "home")) for c in device.sent)
 
 
@@ -231,7 +233,7 @@ def test_absolute_drag_can_lift_slowly_before_carrying(tmp_path, monkeypatch):
     assert all(a.startswith("at ") for a in ats) and sleeps == [f"sleep {0.6 / LIFT_STEPS}"] * LIFT_STEPS
     y_after_lift = int(ats[-1].split()[2]) / ABS_MAX
     assert abs(y_after_lift - (0.5 - LIFT_DIST)) < 1e-3  # the first LIFT_DIST of the way, slowly
-    assert device.sent[-2:] == ["sleep 1.0", "release"]
+    assert device.sent[-3:] == ["sleep 1.0", "release", PARK_AT]
 
 
 def test_absolute_pointer_is_woken_before_acting_after_a_pause(tmp_path, monkeypatch):
@@ -308,7 +310,7 @@ def test_carry_leaves_the_edge_as_soon_as_the_page_starts_to_turn(tmp_path, monk
     script = [_jpeg(30, (0.85, 0.13))] * 3 + [p1] * 37 + [_jpeg(80)] + fresh(p2, 8) + [_jpeg(170)] + [p3] * 40
     phone, device = carry_phone(tmp_path, monkeypatch, script)
     assert asyncio.run(phone.carry((0.85, 0.13), (0.5, 0.6), pages=1, pick=0.5, lift=0.6, rest=1.0)) == 1
-    assert device.sent[-2:] == ["sleep 1.0", "release"]
+    assert device.sent[-2:] == ["sleep 1.0", "release"]  # carry has its own release: no park
     polls = device.sent.count("sleep 0.05")  # FLIP_POLL checks at the edge
     assert 10 < polls < 30  # waited for the first turn (index 40) to settle, left before the second (index 49)
     edge = f"at {round(0.985 * ABS_MAX)} {round(0.80 * ABS_MAX)}"  # the empty band, beside no icon

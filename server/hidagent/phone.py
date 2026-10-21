@@ -77,6 +77,8 @@ FLIP_TIMEOUT = 4.0      # seconds at the edge without a page turn: give up and p
 _clock = time.monotonic  # what carry() times a page turn by (tests replace it with the polls' clock)
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
 SPOTLIGHT_SWIPE = ((0.5, 0.45), (0.5, 0.65))  # a short pull down from the middle of the Home Screen opens Spotlight
+PARK = (0.015, 0.5)     # where the absolute pointer waits after a gesture: off the rows' text and controls, so the next
+                        # screenshot shows the result (it sat on the switch it had just flipped, 2026-10-21, #74 M4)
 MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
 
 
@@ -322,6 +324,13 @@ class Phone:
             await asyncio.sleep(ABS_TAP_SETTLE)
         await self.device.send("click")
         await asyncio.sleep(TAP_GAP)
+        await self._park()
+
+    async def _park(self) -> None:
+        """Move the absolute pointer to PARK after a gesture, so the screenshot shows what the gesture did (a relative
+        pointer stays: moving it would cost accuracy)."""
+        if self.absolute:
+            await self._at(*PARK)
 
     async def long_press(self, x: float, y: float, seconds: float = LONG_PRESS, aim: bool = False) -> None:
         """Press and keep the button down, then let go where it was pressed: a touch-and-hold.
@@ -338,6 +347,7 @@ class Phone:
         finally:
             await self.device.send("release")
         await asyncio.sleep(TAP_GAP)
+        await self._park()
 
     async def swipe(self, x1: float, y1: float, x2: float, y2: float, hold: bool = True) -> None:
         await self.drag([(x1, y1), (x2, y2)], hold)
@@ -377,6 +387,7 @@ class Phone:
                 await asyncio.sleep(pause)
         finally:
             await self.device.send("release")
+        await self._park()
 
     async def _lift(self, start: tuple[float, float], toward: tuple[float, float],
                     seconds: float) -> tuple[float, float]:
