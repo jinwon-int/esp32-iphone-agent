@@ -29,7 +29,8 @@ DOMAIN = "iphone_agent.action_gate"
 PROMPT_VERSION = "iphone-gate-v1"
 MIN_CONFIDENCE = 0.5  # fleet default for gates (nunchi #1851); used only for the "would" column for now
 OFF_GOAL_BELOW = 0.3  # on_goal probability under which the action would be held for confirmation
-CHECKED = ("tap", "longpress", "swipe", "drag", "path", "circle", "type", "key", "home", "back")  # not wait/replan/…
+CHECKED = ("tap", "longpress", "swipe", "drag", "path", "circle", "type", "key", "home", "back",
+           "spotlight")  # not wait/replan/…
 
 RISK_INSTRUCTIONS = (
     "An AI agent is operating a person's iPhone to reach the person's GOAL. It is about to perform ACTION; THOUGHT "

@@ -942,3 +942,42 @@ def test_parse_keeps_a_multi_line_thought_up_to_the_next_label():
     assert parse_actions("THINK:\n  on the next line\nDO: wait")[0]["thought"] == "on the next line"
     assert parse_actions("DO: wait")[0]["thought"] == ""
     assert parse_actions("THINK: a\r\nDO: tap 10 10\r\n")[0]["thought"] == "a"
+
+
+def test_spotlight_is_home_pull_down_clear_and_type_in_one_action():
+    import asyncio
+
+    from hidagent.agent import ACTIONS, ACTOR_PROMPT, PLANNER_PROMPT, Agent, _pointer_path
+    from hidagent.debug import Trace
+    from hidagent.phone import HOME_SWIPE, SPOTLIGHT_SWIPE
+
+    assert ACTIONS["spotlight"] == ("text",) and "spotlight TEXT" in ACTOR_PROMPT
+    assert "spotlight action" in PLANNER_PROMPT
+    assert "A type or spotlight action always ends the reply" in ACTOR_PROMPT
+    calls = []
+
+    class Phone:
+        async def go_home(self):
+            calls.append("home")
+
+        async def swipe(self, x1, y1, x2, y2, hold=True):
+            calls.append(("swipe", x1, y1, x2, y2, hold))
+
+        async def key(self, combo):
+            calls.append(("key", combo))
+
+        async def type(self, text):
+            calls.append(("type", text))
+
+    class Screen:
+        async def settled(self, since=None, **kw):
+            calls.append(("settled", since is not None))
+            return 0.3, True
+
+    agent = Agent(phone=Phone(), screen=Screen(), actor=None, planner=None, trace=Trace(None))
+    agent._acted_at = 1.0
+    asyncio.run(agent._do({"action": "spotlight", "text": "교보eBook"}))
+    assert calls == ["home", ("settled", True), ("swipe", *SPOTLIGHT_SWIPE[0], *SPOTLIGHT_SWIPE[1], True),
+                     ("settled", True), ("key", "cmd+a"), ("key", "backspace"), ("type", "교보eBook")]
+    assert _pointer_path({"action": "spotlight", "text": "x"}) == [*HOME_SWIPE, *SPOTLIGHT_SWIPE]
+    assert _pointer_path({"action": "spotlight", "text": "x"}, home=[(0.1, 0.2)]) == [(0.1, 0.2), *SPOTLIGHT_SWIPE]

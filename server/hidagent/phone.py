@@ -76,6 +76,7 @@ FLIP_SETTLE = 0.6       # seconds for the turn's animation before the item is ca
 FLIP_TIMEOUT = 4.0      # seconds at the edge without a page turn: give up and put the item back
 _clock = time.monotonic  # what carry() times a page turn by (tests replace it with the polls' clock)
 HOME_SWIPE = ((0.5, 0.995), (0.5, 0.6))  # bottom-edge flick; ending higher would open the app switcher
+SPOTLIGHT_SWIPE = ((0.5, 0.45), (0.5, 0.65))  # a short pull down from the middle of the Home Screen opens Spotlight
 MENU_OPEN_S = 0.6       # most the AssistiveTouch menu takes to open when the screen cannot be watched
 
 
