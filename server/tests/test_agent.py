@@ -902,3 +902,33 @@ def test_a_tap_is_sent_back_only_on_its_fourth_try_without_home(monkeypatch):
                                   [same, close, same, close, same])
     acts = asyncio.run(agent._next_actions())
     assert "3 times" in prompts[-1] and (acts[0]["x"], acts[0]["y"]) != (383, 132)
+
+def test_notes_are_kept_across_rounds_shown_to_the_actor_and_capped():
+    from hidagent.agent import ACTIONS, ACTOR_PROMPT, NOTES_MAX, PLANNER_PROMPT, Agent, parse_actions
+    from hidagent.debug import Trace
+
+    assert ACTIONS["note"] == ("text",) and "note TEXT" in ACTOR_PROMPT and "gets noted once found" in PLANNER_PROMPT
+    ag = Agent(phone=None, screen=None, actor=None, planner=None, trace=Trace(None))
+    ag.task, ag.plan = "Put the app into the folder", "1. Find the folder"
+    acts = parse_actions("THINK: found it\nDO: note the folder 생산성 is in row 6, column 2\nDO: tap 100 200")
+    acts[0]["_shot"] = b"f0"
+    rest = ag._take_notes(acts)
+    # the note is kept, the tap stays with the screenshot, the note is a recorded step carrying the thought
+    assert [a["action"] for a in rest] == ["tap"] and rest[0]["_shot"] == b"f0" and "_shot" not in acts[0]
+    assert ag.notes == ["the folder 생산성 is in row 6, column 2"]
+    assert ag.steps[-1]["action"] == "note" and ag.steps[-1]["thought"] == "found it" and ag.steps[-1]["shot"] is False
+    assert ag._moves() == []  # a note is not a move on the phone (no loop detection on it)
+    # the same fact again (case, spacing) is not added twice; a notes-only reply leaves nothing to do
+    assert ag._take_notes(parse_actions("THINK: again\nDO: note The  folder 생산성 is in row 6, column 2")) == []
+    assert ag.notes == ["the folder 생산성 is in row 6, column 2"]
+    for i in range(NOTES_MAX + 1):
+        ag._take_notes(parse_actions(f"THINK: n\nDO: note fact {i}"))
+    assert len(ag.notes) == NOTES_MAX and ag.notes[-1] == f"fact {NOTES_MAX}" and ag.notes[0] == "fact 1"
+    ctx = ag._context("(none)")
+    assert ctx.startswith("Goal: Put the app into the folder\n\nPlan:\n1. Find the folder\n\n"
+                          "Notes (facts you recorded in earlier rounds):\n- fact 1\n")
+    assert ctx.endswith("- fact 8\n\nRecent actions:\n(none)")
+    ag.notes = []
+    assert ag._context("(none)") == ("Goal: Put the app into the folder\n\nPlan:\n1. Find the folder\n\n"
+                                     "Recent actions:\n(none)")
+    assert ag._take_notes(parse_actions("THINK: plain\nDO: tap 1 1")) == parse_actions("THINK: plain\nDO: tap 1 1")
