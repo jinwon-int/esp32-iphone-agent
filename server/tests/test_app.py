@@ -295,6 +295,6 @@ def test_carry_endpoint(web, monkeypatch):
     monkeypatch.setattr(module, "phone", FakePhone())
     r = client.post("/api/carry", json={"x1": 0.85, "y1": 0.13, "x2": 0.5, "y2": 0.6, "pages": -1})
     assert r.status_code == 200 and r.json()["pages_turned"] == 1
-    assert calls == [((0.85, 0.13), (0.5, 0.6), -1, 0.5, 0.6, 1.0)]
+    assert calls == [((0.85, 0.13), (0.5, 0.6), -1, 0.5, 0.6, 1.2)]  # rest defaults to DROP
     assert client.post("/api/carry", json={"x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2, "pages": 0}).status_code == 422
     assert client.post("/api/carry", json={"x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2, "pages": 2}).status_code == 422
