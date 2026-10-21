@@ -21,7 +21,7 @@ from pathlib import Path
 
 from . import vision
 from .device import Device, DeviceError
-from .hangul import has_hangul, to_dubeolsik
+from .hangul import has_hangul, script_runs, to_dubeolsik
 
 log = logging.getLogger(__name__)
 
@@ -518,15 +518,26 @@ class Phone:
         await self.device.send(f"scroll {lines} 0")
 
     async def type(self, text: str, piece: int = 200) -> None:
-        if has_hangul(text):  # Korean goes out as 2-set layout keys; the phone's input language must be Korean
+        """ASCII as it is; Korean as 2-set layout keys. Mixed text is typed run by run, the input language switched
+        (key ctrl+space) between a Korean and an English run and switched back at the end, so the phone is left in
+        the language it started in; which language that is remains the phone's state (the agent checks the field)."""
+        runs = script_runs(text) if has_hangul(text) else [(False, text)]
+        keys = []
+        for korean, run in runs:
             try:
-                text = to_dubeolsik(text)
+                part = to_dubeolsik(run) if korean else run
             except ValueError as e:
                 raise DeviceError(str(e)) from e
-        if not text.isascii():  # the USB keyboard can only type ASCII; fail clearly instead of typing garbage
-            raise DeviceError("only ASCII or Korean text can be typed")
-        for i in range(0, len(text), piece):  # the board takes lines of limited length
-            await self.device.send(f"type {text[i:i + piece]}")
+            if not part.isascii():  # the USB keyboard can only type ASCII; fail clearly instead of typing garbage
+                raise DeviceError("only ASCII or Korean text can be typed")
+            keys.append(part)
+        for n, part in enumerate(keys):
+            if n:
+                await self.device.send("key ctrl+space")
+            for i in range(0, len(part), piece):  # the board takes lines of limited length
+                await self.device.send(f"type {part[i:i + piece]}")
+        if len(keys) > 1 and len(keys) % 2 == 0:  # an odd number of switches: back to the language we started in
+            await self.device.send("key ctrl+space")
 
     async def key(self, combo: str) -> None:
         await self.device.send(f"key {combo}")

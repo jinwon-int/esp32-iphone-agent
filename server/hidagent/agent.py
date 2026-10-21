@@ -106,7 +106,8 @@ Actions:
                              handle; to scroll, use swipe, not drag)
   path X1 Y1 X2 Y2 X3 Y3 …  (one continuous stroke through 2-20 points, for drawing)
   circle X Y R              (draw a circle centered at X Y; R is the radius in pixels)
-  type TEXT                 (English or Korean, not both in one action; tap the input field first. Look at the
+  type TEXT                 (English, Korean or both: between a Korean and an English part the input language is
+                             switched for you and switched back after; tap the input field first. Look at the
                              field afterwards: if the text came out in the other alphabet (e.g. "ㅁㅠㅊ" for abc,
                              or "tjfwjd" for 설정), the input language is wrong: clear the field (key cmd+a, then
                              key backspace), switch with key ctrl+space, then type again)
@@ -193,15 +194,25 @@ def parse_command(line: str, size: tuple[int, int] | None = None) -> dict:
 
 
 def parse_actions(text: str, size: tuple[int, int] | None = None) -> list[dict]:
-    """Parse a THINK / DO… reply (an optional ZH line is kept); the thought goes on the first action."""
-    thought = re.search(r"^\s*THINK\s*[:：]\s*(.*?)\s*$", text, re.M | re.I)
-    zh = re.search(r"^\s*ZH\s*[:：]\s*(.*?)\s*$", text, re.M | re.I)
+    """Parse a THINK / DO… reply (an optional ZH block is kept); the thought goes on the first action.
+
+    THINK and ZH run from their label to the next labelled line (THINK, ZH or DO) — several lines when the actor
+    lists what it sees (a survey's rows), stripped and joined with newlines. DO is one action per line.
+    """
+    thought, zh = _block("THINK", text), _block("ZH", text)
     acts = [parse_command(line, size)
             for line in re.findall(r"^\s*DO\s*[:：]\s*(.*?)\s*$", text, re.M | re.I)][:6]
     if not acts:
         raise ValueError(f"no DO line in reply: {text[:200]}")
-    acts[0] = {"thought": thought.group(1) if thought else "", "thought_zh": zh.group(1) if zh else "", **acts[0]}
+    acts[0] = {"thought": thought, "thought_zh": zh, **acts[0]}
     return acts
+
+
+def _block(label: str, text: str) -> str:
+    """The label's value and the lines after it up to the next THINK / ZH / DO label, each stripped, joined by
+    newlines (empty lines dropped); "" without the label."""
+    m = re.search(rf"^\s*{label}\s*[:：](.*?)(?=^\s*(?:THINK|ZH|DO)\s*[:：]|\Z)", text, re.M | re.I | re.S)
+    return "\n".join(line.strip() for line in m.group(1).splitlines() if line.strip()) if m else ""
 
 
 def parse_plan(text: str) -> tuple[str, str]:

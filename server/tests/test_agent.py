@@ -932,3 +932,13 @@ def test_notes_are_kept_across_rounds_shown_to_the_actor_and_capped():
     assert ag._context("(none)") == ("Goal: Put the app into the folder\n\nPlan:\n1. Find the folder\n\n"
                                      "Recent actions:\n(none)")
     assert ag._take_notes(parse_actions("THINK: plain\nDO: tap 1 1")) == parse_actions("THINK: plain\nDO: tap 1 1")
+
+def test_parse_keeps_a_multi_line_thought_up_to_the_next_label():
+    reply = ("THINK: Rows on screen:\n카카오톡 44.42GB 오늘\n\nYouTube 5.83GB 오늘  \nZH: 两行\n"
+             "DO: swipe 295 900 295 600\nDO: wait")
+    acts = parse_actions(reply)
+    assert acts[0]["thought"] == "Rows on screen:\n카카오톡 44.42GB 오늘\nYouTube 5.83GB 오늘"
+    assert acts[0]["thought_zh"] == "两行" and [a["action"] for a in acts] == ["swipe", "wait"]
+    assert parse_actions("THINK:\n  on the next line\nDO: wait")[0]["thought"] == "on the next line"
+    assert parse_actions("DO: wait")[0]["thought"] == ""
+    assert parse_actions("THINK: a\r\nDO: tap 10 10\r\n")[0]["thought"] == "a"
