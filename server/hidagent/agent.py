@@ -23,6 +23,8 @@ PLANNER_PROMPT = """You plan tasks on an iPhone. Given the goal and the current 
 write a short numbered plan (at most 6 steps) of what to do on screen. Plain text only, in English.
 Plan only what the goal needs, from what you can see; never invent accounts, emails, logins or
 screens you have not seen. Later steps can stay general (e.g. "Draw the face on the canvas").
+When a later step depends on something that has to be found first (a folder, a row, a setting), say so,
+so that where it is gets noted once found.
 To open an app, prefer search over paging through home screens: tap the "Search" pill above
 the dock (or swipe down from the middle of the home screen), type the app name, tap the result.
 If the goal involves paying or buying, sending a message or email, deleting the user's own items
@@ -54,6 +56,8 @@ Aim at the visual center of the element you want, not its edge or its label.
 Look before you act: describe what is really on the screen now, not what you expect.
 Each recent action says whether the screen changed after it. If it did NOT change, the action
 missed or had no effect: do not assume it worked; aim again more precisely or try another way.
+Notes list facts you recorded in earlier rounds; you do not remember earlier screens otherwise, so a note is
+how a fact survives: trust the notes over guessing, and re-check one only if the screen contradicts it.
 Only type when a text field is visibly focused (a text cursor or highlighted field; the on-screen keyboard
 may stay hidden because the board is a hardware keyboard).
 Swipes have no momentum: content moves exactly as far as the finger and stops. Prefer short swipes
@@ -111,6 +115,9 @@ Actions:
                              reply, not backspace again and again
   home | back | wait
   replan                    (the plan no longer fits the screen)
+  note TEXT                 (keep a fact for later rounds: where something is, a name you read, what already
+                             worked. It comes back to you under Notes every round. Its own DO line before the
+                             action it belongs to; short; at most one per reply; nothing happens on the phone)
   done ANSWER               (the goal is reached; ANSWER is the result for the user. Before done, read the
                              screen's title or name and check it is exactly the item the goal names, not a
                              neighbouring row; if it is another item, go back and open the right one instead)
@@ -138,8 +145,10 @@ META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "chan
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
            "longpress": ("x", "y"), "drag": ("x1", "y1", "x2", "y2"),
            "type": ("text",), "key": ("combo",), "done": ("answer",), "fail": ("reason",), "confirm": ("reason",),
-           "home": (), "back": (), "wait": (), "replan": ()}
+           "home": (), "back": (), "wait": (), "replan": (), "note": ("text",)}
 TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the last step to the user
+NOTES_MAX = 8  # facts the actor keeps across rounds (the newest stay); a note never reaches the phone
+NOTE_CHARS = 120
 TEXT_ARGS = ("text", "combo", "answer", "reason")
 
 
@@ -254,6 +263,7 @@ class Agent:
         self.max_steps, self.max_failures = max_steps, max_failures
         self.settle = settle or {}  # keyword overrides for screen.settled() after a step (SETTLE_* variables)
         self.task, self.plan, self.steps = "", "", []
+        self.notes: list[str] = []  # the actor's facts for later rounds (note action), shown in every actor prompt
         self.shots: dict[int, bytes] = {}  # step index -> screenshot the model decided on
         self._pointer = (0.0, 0.0)  # last pointer position (screen fractions)
         self._acted_at: float | None = None  # when the last action began: the settle waits for a frame after it
@@ -278,6 +288,7 @@ class Agent:
 
     def _reset_run(self, task: str) -> None:
         self.task, self.plan, self.steps, self.shots = task, "", [], {}
+        self.notes = []
         self._pointer = (0.0, 0.0)
         self._rejected = 0
 
@@ -289,6 +300,7 @@ class Agent:
         if self.running:
             raise RuntimeError("stop the agent first")
         self.task, self.plan, self.steps, self.shots = "", "", [], {}
+        self.notes = []
         self._run_id += 1
 
     def _record(self, shot: bytes | None = None, **step) -> None:
@@ -337,7 +349,9 @@ class Agent:
 
     async def _step(self) -> bool:
         """One see-think-act round (one or more actions). Returns True when the task is over."""
-        acts = await self._next_actions()
+        acts = self._take_notes(await self._next_actions())
+        if not acts:  # a reply of notes only: look again next round
+            return False
         seen = acts[0]["_shot"]
         spots = [self._pointer]  # where the pointer was and goes: pointer moves are not screen changes
         stuck = self._repeating(acts[0])
@@ -441,6 +455,36 @@ class Agent:
 
         check.add_done_callback(done)
 
+    def _take_notes(self, acts: list[dict]) -> list[dict]:
+        """Keep the reply's note lines as facts for later rounds (NOTES_MAX, the newest stay, no duplicates) and
+        return the other actions; the screenshot moves to the first of those, so the change check still has it.
+        Each note is recorded as a step (it shows in the step log), with the reply's thought when it came first."""
+        notes = [a for a in acts if a["action"] == "note"]
+        if not notes:
+            return acts
+        rest = [a for a in acts if a["action"] != "note"]
+        shot = acts[0].pop("_shot", None)
+        if rest:
+            rest[0]["_shot"] = shot
+        for n in notes:
+            text = " ".join(n["text"].split())[:NOTE_CHARS]
+            if text and text.casefold() not in {x.casefold() for x in self.notes}:
+                self.notes.append(text)
+                del self.notes[:-NOTES_MAX]
+            self._record(None, **n)
+        return rest
+
+    def _moves(self) -> list[dict]:
+        """The recorded actions on the phone: no plans, no notes."""
+        return [s for s in self.steps if "plan" not in s and s.get("action") != "note"]
+
+    def _context(self, history: str) -> str:
+        """The actor's prompt head: goal, plan, the notes it kept (if any), then the recent actions."""
+        notes = "".join(f"- {n}\n" for n in self.notes)
+        if notes:
+            notes = f"Notes (facts you recorded in earlier rounds):\n{notes}\n"
+        return f"Goal: {self.task}\n\nPlan:\n{self.plan}\n\n{notes}Recent actions:\n{history}"
+
     def _missed(self) -> bool:
         """The previous round changed nothing on screen, so a tap may have landed off target."""
         return bool(self.steps) and self.steps[-1].get("changed") is False
@@ -454,7 +498,7 @@ class Agent:
         """
         if act["action"] not in ("tap", "longpress"):
             return 0
-        moves = [s for s in self.steps if "plan" not in s]
+        moves = self._moves()
         for i in range(len(moves) - 1, -1, -1):
             if moves[i].get("action") in ("home", "back"):
                 moves = moves[i + 1:]
@@ -473,7 +517,7 @@ class Agent:
 
         Repeating a move that still changes the screen (e.g. scrolling down a long list) is progress, not a loop.
         """
-        moves = [s for s in self.steps if "plan" not in s][-(limit - 1):]
+        moves = self._moves()[-(limit - 1):]
         return (len(moves) == limit - 1 and all(_key(m) == _key(act) for m in moves)
                 and moves[-1].get("changed") is not True)
 
@@ -502,8 +546,8 @@ class Agent:
         size = self._shown_size()  # the actor's unit is pixels of this; None (unreadable frame): taken as 1000x1000
         history = "\n".join(json.dumps(_in_pixels({k: v for k, v in s.items() if k not in hidden}, size))[:300]
                             + effect.get(s.get("changed"), "")
-                            for s in self.steps[-8:] if "plan" not in s) or "(none)"
-        prompt = f"Goal: {self.task}\n\nPlan:\n{self.plan}\n\nRecent actions:\n{history}"
+                            for s in self._moves()[-8:]) or "(none)"
+        prompt = self._context(history)
         ocr_s = None
         if self.ocr is not None and getattr(self.ocr, "mode", "off") == "actor":
             text = await self._screen_text(size)
