@@ -5,8 +5,10 @@ the 2-set layout composes syllables from these keys exactly as a Korean keyboard
 each syllable's jamo reproduces the text (the IME splits a final consonant off again when a vowel follows). Which
 language is active is the phone's state: `key ctrl+space` switches it, and the agent checks the result on screen.
 
-One typing is one language: Latin letters mixed with Hangul would come out in the wrong alphabet, so that is refused.
-Digits, spaces and the usual symbols are the same keys on both layouts and pass through.
+One run of keys is one language: Latin letters and Hangul cannot share a run, since the keys would come out in the
+wrong alphabet. `script_runs` splits mixed text into Korean and English runs (digits, spaces and the usual symbols
+are the same keys on both layouts and stay with the run they are in), and Phone.type switches the input language
+between the runs. `to_dubeolsik` still refuses a mixed run.
 """
 
 _BASE, _LAST = 0xAC00, 0xD7A3  # Hangul syllables 가..힣
@@ -51,3 +53,20 @@ def to_dubeolsik(text: str) -> str:
         else:
             raise ValueError(f"cannot type {c!r}: only Korean and ASCII text")
     return "".join(out)
+
+
+
+def script_runs(text: str) -> list[tuple[bool, str]]:
+    """`text` as (korean, run) pieces: a run changes where a Hangul character follows a Latin letter or the reverse.
+    Digits, spaces and symbols belong to the run they are in; leading ones go with the first letter that follows
+    (or make one non-Korean run when there is no letter at all)."""
+    runs: list[list] = []  # [korean | None, chars]
+    for c in text:
+        korean = True if (_is_syllable(c) or c in _KEY) else (False if (c.isascii() and c.isalpha()) else None)
+        if not runs or (korean is not None and runs[-1][0] is not None and runs[-1][0] != korean):
+            runs.append([korean, c])
+        else:
+            runs[-1][1] += c
+            if runs[-1][0] is None:
+                runs[-1][0] = korean
+    return [(bool(k), r) for k, r in runs]
