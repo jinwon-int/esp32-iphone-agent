@@ -1096,14 +1096,16 @@ def test_prompts_name_the_resting_pointer_so_nobody_treats_it_as_a_touch():
     assert "never count it as something pressed, open or wrong" in CHECK_PROMPT
 
 
-def test_spotlight_types_again_when_korean_came_out_in_latin_letters():
-    """#74 M5-2: with OCR in actor mode the spotlight macro reads the screen after typing; "tlrP" somewhere and 시계
-    nowhere means the input language was English -> clear, switch, type again, `retyped` on the step. No OCR, the
-    Korean on screen, nothing read, other letters or keys too short to look for: nothing more happens."""
+def test_spotlight_korean_mistyped_is_typed_again_at_the_next_rounds_ocr_read():
+    """#74 M5-2, shared with the round: a Korean spotlight leaves what to look for; the next actor round's OCR read
+    (actor mode) is checked — "tlrP" somewhere and 시계 nowhere -> clear, switch, type again, `retyped` on the
+    spotlight's step, the screen settles and is read once more for the prompt. Otherwise the round's one read and
+    nothing more; without OCR for the actor there is no check at all."""
     import asyncio
 
     from hidagent.agent import META, RETYPE_PROBE, Agent, _key
     from hidagent.debug import Trace
+    from hidagent.ocr import OCR
 
     calls = []
 
@@ -1121,11 +1123,19 @@ def test_spotlight_types_again_when_korean_came_out_in_latin_letters():
             calls.append(("type", text))
 
     class Screen:
-        frame = b"jpeg"
+        live, frame, aspect = True, b"jpeg", 0.46
 
         async def settled(self, since=None, **kw):
             calls.append(("settled", kw.get("most")))
             return 0.3, True
+
+    class Actor:
+        model = "fake"
+        prompts: list = []
+
+        async def chat(self, system, text, image=None, max_tokens=600, temperature=0):
+            self.prompts.append(text)
+            return "THINK: t\nDO: tap 10 20"
 
     class FakeOCR:
         mode, last_s = "actor", 0.2
@@ -1135,32 +1145,39 @@ def test_spotlight_types_again_when_korean_came_out_in_latin_letters():
             calls.append("ocr")
             return self.reads.pop(0) if self.reads else []
 
+        lines = staticmethod(OCR.lines)
+
     def run(text, reads, mode="actor"):
         calls.clear()
+        Actor.prompts.clear()
         FakeOCR.mode, FakeOCR.reads = mode, list(reads)
-        agent = Agent(phone=Phone(), screen=Screen(), actor=None, planner=None, trace=Trace(None), ocr=FakeOCR())
-        agent._acted_at = 1.0
+        agent = Agent(phone=Phone(), screen=Screen(), actor=Actor(), planner=Actor(), trace=Trace(None), ocr=FakeOCR())
+        agent.task, agent._acted_at = "Open 시계", 1.0
         act = {"action": "spotlight", "text": text}
         asyncio.run(agent._do(act))
-        return act
+        agent.steps.append(dict(act, changed=True))  # as _step records it before the next round
+        asyncio.run(agent._next_actions())
+        return agent
 
     line = lambda text, y: {"text": text, "x": 0.5, "y": y, "w": 0.3, "h": 0.03, "conf": 0.9}  # noqa: E731
     typed = ["home", ("settled", 1.5), "swipe", ("settled", 1.5), ("key", "cmd+a"), ("key", "backspace"),
              ("type", "시계")]
 
-    act = run("시계", [[line("Siri 제안", 0.3), line("tlrP", 0.92)]])  # iOS puts the field at the bottom
-    assert calls == [*typed, ("settled", 1.5), "ocr", ("key", "cmd+a"), ("key", "backspace"), ("key", "ctrl+space"),
-                     ("type", "시계")]
-    assert act["retyped"] is True and "retyped" in META and _key(act) == {"action": "spotlight", "text": "시계"}
+    agent = run("시계", [[line("Siri 제안", 0.3), line("tlrP", 0.92)], [line("시계", 0.92)]])  # field at the bottom
+    assert calls == [*typed, "ocr", ("key", "cmd+a"), ("key", "backspace"), ("key", "ctrl+space"), ("type", "시계"),
+                     ("settled", 1.5), "ocr"]
+    assert agent.steps[-1]["retyped"] is True and "retyped" in META and agent._retype is None
+    assert _key(agent.steps[-1]) == {"action": "spotlight", "text": "시계"}
+    assert '"시계" @' in Actor.prompts[-1] and "tlrP" not in Actor.prompts[-1]  # the prompt carries the fresh read
 
-    assert "retyped" not in run("시계", [[line("시계", 0.92)]])  # Korean came out right
-    assert calls[-2:] == [("settled", 1.5), "ocr"]
-    assert "retyped" not in run("시계", [[line("시계", 0.3), line("tlrP", 0.92)]])  # the Korean is on screen: unsure
-    assert "retyped" not in run("시계", [[]])  # nothing read: unsure, leave it to the actor
-    assert "retyped" not in run("아", [[line("dk", 0.92)]]) and RETYPE_PROBE == 3 and calls[-1] == ("type", "아")
-    assert run("앱들", [[line("doqemf", 0.92)]])["retyped"] is True  # 6 keys: long enough to look for
-    assert "retyped" not in run("시계", [[line("abc", 0.08)]])  # other letters: not this mistake
-    assert "retyped" not in run("Settings", [[line("Settings", 0.08)]]) and calls == [*typed[:-1], ("type", "Settings")]
-    assert "retyped" not in run("시계", [[line("tlrP", 0.08)]], mode="api") and calls == typed  # OCR not for the actor
-    assert run("교보eBook", [[line("ryqhebook", 0.08)]])["retyped"] is True  # "ryqh" is in it: typed again
-    assert calls[-1] == ("type", "교보eBook")
+    agent = run("시계", [[line("시계", 0.92)]])  # Korean came out right: the round's one read, nothing more
+    assert calls[len(typed):] == ["ocr"] and "retyped" not in agent.steps[-1] and agent._retype is None
+    assert "retyped" not in run("시계", [[line("시계", 0.3), line("tlrP", 0.92)]]).steps[-1]  # the Korean is on screen
+    assert "retyped" not in run("시계", [[]]).steps[-1]  # nothing read: unsure, leave it to the actor
+    assert "retyped" not in run("시계", [[line("abc", 0.92)]]).steps[-1]  # other letters: not this mistake
+    agent = run("아", [[line("dk", 0.92)]])  # 2 keys: too short to look for
+    assert RETYPE_PROBE == 3 and "retyped" not in agent.steps[-1] and agent._retype is None
+    assert "retyped" not in run("Settings", [[line("Settings", 0.92)]]).steps[-1]  # no Korean typed
+    agent = run("시계", [[line("tlrP", 0.92)]], mode="api")  # OCR not for the actor: no read, no check
+    assert calls[len(typed):] == [] and "retyped" not in agent.steps[-1] and agent._retype is None
+    assert run("앱들", [[line("doqemf", 0.92)], []]).steps[-1]["retyped"] is True  # 6 keys: typed again

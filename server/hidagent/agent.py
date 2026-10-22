@@ -294,6 +294,7 @@ class Agent:
         self.settle = settle or {}  # keyword overrides for screen.settled() after a step (SETTLE_* variables)
         self.task, self.plan, self.steps = "", "", []
         self.notes: list[str] = []  # the actor's facts for later rounds (note action), shown in every actor prompt
+        self._retype: dict | None = None  # after a Korean spotlight: what the next round's OCR read is checked for
         self.shots: dict[int, bytes] = {}  # step index -> screenshot the model decided on
         self._pointer = (0.0, 0.0)  # last pointer position (screen fractions)
         self._acted_at: float | None = None  # when the last action began: the settle waits for a frame after it
@@ -319,6 +320,7 @@ class Agent:
     def _reset_run(self, task: str) -> None:
         self.task, self.plan, self.steps, self.shots = task, "", [], {}
         self.notes = []
+        self._retype = None
         self._pointer = (0.0, 0.0)
         self._rejected = 0
 
@@ -582,11 +584,15 @@ class Agent:
         prompt = self._context(history)
         ocr_s = None
         if self.ocr is not None and getattr(self.ocr, "mode", "off") == "actor":
-            text = await self._screen_text(size)
+            items = await self._ocr_items()
+            if await self._retype_if_mistyped(items):
+                items = await self._ocr_items()
+            text = self.ocr.lines(items, size or 1000) if items else ""
             ocr_s = self.ocr.last_s
             if text:
                 prompt += ("\n\nText read from the screen (OCR; x y = centre of each line in pixels of the "
                            "screenshot; when you tap a word or a row, aim with these instead of estimating):\n" + text)
+        self._retype = None  # without OCR for the actor there is nothing to check it against
         if size:
             w, h = size
             prompt += (f"\n\nThe screenshot is {w}x{h} pixels. Give positions as pixels on it "
@@ -619,13 +625,13 @@ class Agent:
             return [{**a, "_shot": frame} for a in acts]  # every action is drawn on the same screenshot
         raise ValueError(f"actor gave no valid action: {reply[:200]}")
 
-    async def _screen_text(self, size: tuple[int, int] | None = None) -> str:
-        """OCR lines for the actor's prompt, or "" when OCR fails: the actor still has the screenshot."""
+    async def _ocr_items(self) -> list[dict]:
+        """The screen's OCR lines for the actor's prompt, or [] when OCR fails: the actor still has the screenshot."""
         try:
-            return self.ocr.lines(await self.ocr.read(self.screen.frame), size or 1000)
+            return await self.ocr.read(self.screen.frame)
         except Exception as e:  # noqa: BLE001 - an OCR hiccup must never cost the step
             log.warning("OCR skipped: %s", str(e)[:120])
-            return ""
+            return []
 
     def _drag_guard(self, a: dict):
         """The drag's menu guard (#35, #74 M8): after the pick, how much did the screen change? A quick-action menu
@@ -644,40 +650,45 @@ class Agent:
 
         return guard
 
-    async def _retype_if_other_alphabet(self, a: dict) -> None:
-        """Spotlight typed Korean while the phone's input language was English (#74 M5-2): the field then shows the
-        2-set keys as Latin letters ("tlrP" for 시계), and the actor spent four rounds clearing, switching and typing
-        again (0.5.7 device runs). With OCR in actor mode, read the screen once the text settled: those letters
-        somewhere on it and the Korean run nowhere -> clear the field, switch the language and type again, inside this
-        one action; the step says `retyped`. The field's place is not assumed (iOS puts Spotlight's field at the bottom
-        of the screen; 0.6.0 run 631415927a6f missed it in a top band). Short keys (under RETYPE_PROBE letters) are not
-        looked for. Without OCR, or when unsure, nothing changes: the actor reads the field as before."""
-        text = a["text"]
-        if not has_hangul(text) or self.ocr is None or getattr(self.ocr, "mode", "off") != "actor":
-            return
+    @staticmethod
+    def _retype_plan(text: str) -> dict | None:
+        """What to look for at the next round's OCR read after Spotlight typed Korean (#74 M5-2): the first Korean
+        run and its 2-set keys ("tlrP" for 시계). None when there is nothing to check (no Korean, keys shorter than
+        RETYPE_PROBE: a single syllable's keys would match too easily)."""
+        if not has_hangul(text):
+            return None
         try:
-            korean_run = next(run for korean, run in script_runs(text) if korean)
-            probe = to_dubeolsik(korean_run)
+            run = next(r for korean, r in script_runs(text) if korean)
+            probe = to_dubeolsik(run)
         except (StopIteration, ValueError):
-            return
-        if len(probe) < RETYPE_PROBE:
-            return
-        await self.screen.settled(since=self._acted_at, **{**self.settle, **SPOTLIGHT_SETTLE})
-        try:
-            items = await self.ocr.read(self.screen.frame)
-        except Exception as e:  # noqa: BLE001 - an OCR hiccup must never cost the step
-            log.warning("OCR skipped: %s", str(e)[:120])
-            return
+            return None
+        return {"text": text, "run": run, "probe": probe} if len(probe) >= RETYPE_PROBE else None
+
+    async def _retype_if_mistyped(self, items: list[dict]) -> bool:
+        """Spotlight typed Korean while the phone's input language was English: the field shows the 2-set keys as
+        Latin letters, and the actor spent four rounds clearing, switching and typing again (0.5.7 device runs).
+        Checked on the OCR lines the round reads for the actor's prompt anyway (no settle or read of its own): the
+        keys somewhere on the screen and the Korean run nowhere -> clear the field, switch the input language and
+        type again, `retyped` on the spotlight's step, then the screen settles for a fresh read. The field's place
+        is not assumed (iOS puts Spotlight's field at the bottom; 0.6.0 run 631415927a6f missed it in a top band).
+        Unsure (the Korean on screen, nothing read, other letters): nothing, the actor reads the field as before."""
+        plan, self._retype = self._retype, None
+        if plan is None:
+            return False
         texts = [it["text"] for it in items]
-        if any(korean_run in t for t in texts) or not any(probe.casefold() in t.casefold() for t in texts):
-            return
+        if any(plan["run"] in t for t in texts) or not any(plan["probe"].casefold() in t.casefold() for t in texts):
+            return False
         log.info("agent: Spotlight shows %r for %r: the input language was English; switching and typing again",
-                 probe, text)
+                 plan["probe"], plan["text"])
+        self._acted_at = time.time()
         await self.phone.key("cmd+a")
         await self.phone.key("backspace")
         await self.phone.key("ctrl+space")
-        await self.phone.type(text)
-        a["retyped"] = True
+        await self.phone.type(plan["text"])
+        if self.steps and self.steps[-1].get("action") == "spotlight":
+            self.steps[-1]["retyped"] = True
+        await self.screen.settled(since=self._acted_at, **{**self.settle, **SPOTLIGHT_SETTLE})
+        return True
 
     async def _do(self, a: dict) -> None:
         p = lambda k: a[k] / 1000  # noqa: E731
@@ -699,7 +710,7 @@ class Agent:
                 await self.phone.key("cmd+a")
                 await self.phone.key("backspace")
                 await self.phone.type(a["text"])
-                await self._retype_if_other_alphabet(a)
+                self._retype = self._retype_plan(a["text"])  # checked at the next round's OCR read (#74 M5-2)
             case "key": await self.phone.key(a["combo"])
             case "home": await self.phone.go_home()
             case "back": await self.phone.go_back()
