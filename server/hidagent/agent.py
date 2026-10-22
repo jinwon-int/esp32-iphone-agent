@@ -15,7 +15,7 @@ from .gate import Gate
 from .gate import describe as gate_describe
 from .hangul import has_hangul, script_runs, to_dubeolsik
 from .llm import LLM, image_size, shrink
-from .phone import DROP, HOME_SWIPE, LIFT, PARK, PICK_UP, SPOTLIGHT_SWIPE, Phone
+from .phone import DROP, HOME_SWIPE, LIFT, PARK, PICK_UP, SPOTLIGHT_SWIPE, GuardStop, Phone
 from .screen import Screen
 
 log = logging.getLogger(__name__)
@@ -339,9 +339,11 @@ class Agent:
     def _reset_run(self, task: str) -> None:
         self.task, self.plan, self.steps, self.shots = task, "", [], {}
         self.notes = []
+        self._menu_change: float | None = None
         self._retype = None
         self._pointer = (0.0, 0.0)
         self._rejected = 0
+        self._menu_change = None  # the guard's measurement when it stopped a drag; rides on that hiccup (#74 M8)
 
     def stop(self) -> None:
         if self.running:
@@ -384,7 +386,11 @@ class Agent:
                 except BlindError:
                     raise
                 except Exception as e:  # a bad reply or a dropped link: recover, don't crash
-                    self._record(action="hiccup", reason=str(e)[:300])
+                    extra = {}
+                    if isinstance(e, GuardStop) and self._menu_change is not None:
+                        extra["guard_change"] = self._menu_change  # the menu's change rides on the hiccup (#74 M8)
+                    self._menu_change = None
+                    self._record(action="hiccup", reason=str(e)[:300], **extra)
                     board_drop = isinstance(e, DeviceError) and await self.phone.device.wait_connected(15)
                     failures += 0 if board_drop else 1  # the board came back: not the agent's fault
                     if failures >= self.max_failures:
@@ -665,7 +671,10 @@ class Agent:
             await asyncio.sleep(MENU_LOOK)
             change = vision.page_change(before, self.screen.frame)
             a["guard_change"] = round(change, 1)
-            return DRAG_GUARD == "apply" and change > MENU_CHANGE
+            stop = DRAG_GUARD == "apply" and change > MENU_CHANGE
+            if stop:  # the step becomes a hiccup, so the measurement is kept for it (device 2026-10-22: lost before)
+                self._menu_change = a["guard_change"]
+            return stop
 
         return guard
 
