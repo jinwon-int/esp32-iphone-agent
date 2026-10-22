@@ -1,0 +1,19 @@
+# Deployed unit (paths and the tailnet address filled in per node; see README.md). Install to /etc/systemd/system/.
+[Unit]
+Description=hidagent Claude CLI adapter (OpenAI-compatible, tailnet) - esp32-iphone-agent #67
+After=network-online.target tailscaled.service
+Wants=network-online.target
+[Service]
+User=<user>
+Group=<user>
+WorkingDirectory=/home/<user>/.local/share/hidagent-claude
+Environment=HOME=/home/<user>
+Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=ADAPTER_TOKEN_FILE=/home/<user>/.local/share/hidagent-claude/token
+Environment=ADAPTER_HOST=100.x.y.z
+Environment=CLAUDE_BIN=/usr/bin/claude
+ExecStart=/usr/bin/python3 /home/<user>/.local/share/hidagent-claude/adapter.py
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
