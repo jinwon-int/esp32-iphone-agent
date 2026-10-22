@@ -189,8 +189,18 @@ def _seconds_env(name: str, default: float, most: float = 3.0) -> float:
 DRAG_PICK = _seconds_env("DRAG_PICK", PICK_UP)
 MENU_LOOK = _seconds_env("DRAG_MENU_LOOK", 0.3)  # seconds after the pick before the guard looks (a menu takes a moment)
 MENU_CHANGE = 12.0   # vision.page_change above this after the pick = a menu blurred the screen (an icon lift < 10)
+# A swipe this long and this flat is a Home Screen page turn: it needs the flick (no rest before the release), like
+# the home and back gestures. Device 2026-10-22 (runs c4801083b264, 617c1628e1e9): page swipes sent with the rest left
+# the Home Screen standing between two pages and, the pointer still down for the rest, in edit mode.
+PAGE_TURN_MIN_DX = 0.35
+PAGE_TURN_MAX_DY = 0.15
 NOTE_CHARS = 120
 TEXT_ARGS = ("text", "combo", "answer", "reason")
+
+
+def page_turn(x1: float, y1: float, x2: float, y2: float) -> bool:
+    """A long, flat swipe across the screen: a Home Screen page turn, sent as a flick."""
+    return abs(x2 - x1) >= PAGE_TURN_MIN_DX and abs(y2 - y1) <= PAGE_TURN_MAX_DY
 
 
 class OffScreen(ValueError):
@@ -724,7 +734,9 @@ class Agent:
         p = lambda k: a[k] / 1000  # noqa: E731
         match a["action"]:
             case "tap": await self.phone.tap(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
-            case "swipe": await self.phone.swipe(p("x1"), p("y1"), p("x2"), p("y2"))
+            case "swipe":  # lists and pickers stop where the finger stops; a page turn is flicked
+                await self.phone.swipe(p("x1"), p("y1"), p("x2"), p("y2"),
+                                       hold=not page_turn(p("x1"), p("y1"), p("x2"), p("y2")))
             case "longpress": await self.phone.long_press(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
             case "drag":  # lift the item, carry it, rest on the target; aim first: picking the wrong icon costs more
                 await self.phone.drag([(p("x1"), p("y1")), (p("x2"), p("y2"))], pick=DRAG_PICK, rest=DROP, aim=True,
