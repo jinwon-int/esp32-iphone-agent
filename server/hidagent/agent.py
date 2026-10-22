@@ -25,6 +25,8 @@ Plan only what the goal needs, from what you can see; never invent accounts, ema
 screens you have not seen. Later steps can stay general (e.g. "Draw the face on the canvas").
 When a later step depends on something that has to be found first (a folder, a row, a setting), say so,
 so that where it is gets noted once found.
+A step whose result the later steps build on (a switch turned on, a value entered, a screen reached) ends with
+"note it once confirmed", so that the actor records it as done instead of doing it again.
 To open an app, use the spotlight action (home, Spotlight and the name typed in one action), then
 tap the result; never page through home screens looking for it.
 If the goal involves paying or buying, sending a message or email, deleting the user's own items
@@ -58,6 +60,10 @@ Each recent action says whether the screen changed after it. If it did NOT chang
 missed or had no effect: do not assume it worked; aim again more precisely or try another way.
 Notes list facts you recorded in earlier rounds; you do not remember earlier screens otherwise, so a note is
 how a fact survives: trust the notes over guessing, and re-check one only if the screen contradicts it.
+The moment the screen confirms a step of the plan (a switch shows on, a page is open, a value is saved), record it
+with a note in the same reply as the action that follows (e.g. "note Bold Text confirmed on; next: turn it off").
+Before redoing anything, read the notes: a step they say is done is done, even if the screen looks different now
+because your later actions changed it; go on to the next step instead of repeating that one.
 Only type when a text field is visibly focused (a text cursor or highlighted field; the on-screen keyboard
 may stay hidden because the board is a hardware keyboard).
 Swipes have no momentum: content moves exactly as far as the finger and stops. Prefer short swipes
