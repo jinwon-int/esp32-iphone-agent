@@ -560,6 +560,38 @@ def test_longpress_and_drag_reach_the_phone():
     assert (PICK_UP, LIFT, DROP) == (0.5, 0.6, 1.2)  # the timings that put items into folders (#35 device runs)
 
 
+def test_drag_pick_and_menu_look_come_from_the_environment(monkeypatch):
+    """#74 M8 measurement: DRAG_PICK is the hold after the press (default PICK_UP), DRAG_MENU_LOOK the guard's wait."""
+    import asyncio
+
+    import hidagent.agent as agent_mod
+    from hidagent.agent import Agent, _seconds_env
+    from hidagent.debug import Trace
+    from hidagent.phone import PICK_UP
+
+    assert agent_mod.DRAG_PICK == PICK_UP and agent_mod.MENU_LOOK == 0.3  # defaults when the env is unset
+    monkeypatch.setenv("X_SECONDS", "0.9")
+    assert _seconds_env("X_SECONDS", 0.5) == 0.9
+    for bad in ("", "  ", "abc", "-0.1", "3.5", "nan"):
+        monkeypatch.setenv("X_SECONDS", bad)
+        assert _seconds_env("X_SECONDS", 0.5) == 0.5, bad
+    monkeypatch.setenv("X_SECONDS", "0")
+    assert _seconds_env("X_SECONDS", 0.5) == 0  # no hold at all is allowed
+    monkeypatch.delenv("X_SECONDS")
+    assert _seconds_env("X_SECONDS", 0.5) == 0.5
+
+    calls = []
+
+    class Phone:
+        async def drag(self, points, hold=True, pick=0.0, rest=None, aim=False, stops=None, lift=0.0, guard=None):
+            calls.append(pick)
+
+    monkeypatch.setattr(agent_mod, "DRAG_PICK", 0.9)
+    agent = Agent(phone=Phone(), screen=None, actor=None, planner=None, trace=Trace(None))
+    asyncio.run(agent._do({"action": "drag", "x1": 150, "y1": 350, "x2": 400, "y2": 350}))
+    assert calls == [0.9]  # the configured hold reaches the phone
+
+
 def test_longpress_and_drag_pointer_paths():
     from hidagent.agent import _pointer_path
 
