@@ -13,6 +13,7 @@ from .debug import Trace
 from .device import DeviceError
 from .gate import Gate
 from .gate import describe as gate_describe
+from .hangul import has_hangul, script_runs, to_dubeolsik
 from .llm import LLM, image_size, shrink
 from .phone import DROP, HOME_SWIPE, LIFT, PARK, PICK_UP, SPOTLIGHT_SWIPE, Phone
 from .screen import Screen
@@ -153,7 +154,7 @@ it is not a touch and presses nothing on that row; never count it as something p
 MAX_REJECTED = 2  # done is sent back at most this often per run; the next done is taken, marked unverified
 
 META = ("t", "thought", "thought_zh", "think_s", "act_s", "shot", "_shot", "changed", "settle_s", "stable",
-        "ocr_s", "gate", "guard_change")  # not the action
+        "ocr_s", "gate", "guard_change", "retyped")  # not the action
 
 # action name -> argument names; numeric arguments are stored as 0-1000 of each screen axis (the actor gives pixels)
 ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x", "y", "r"), "path": ("points",),
@@ -163,6 +164,7 @@ ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x",
 TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the last step to the user
 NOTES_MAX = 8  # facts the actor keeps across rounds (the newest stay); a note never reaches the phone
 SPOTLIGHT_SETTLE = {"most": 1.5}  # Spotlight's suggestions keep moving: never wait the full settle (4 s seen on device)
+SPOTLIGHT_FIELD = 0.2  # Spotlight's search field sits in this top band of the screen (fraction of its height, #74 M5-2)
 DRAG_GUARD = os.environ.get("DRAG_GUARD", "observe").strip().lower() or "observe"  # off | observe | apply (#74 M8)
 MENU_LOOK = 0.3      # seconds after the pick before the guard looks (a quick-action menu takes a moment to draw)
 MENU_CHANGE = 12.0   # vision.page_change above this after the pick = a menu blurred the screen (an icon lift < 10)
@@ -642,6 +644,37 @@ class Agent:
 
         return guard
 
+    async def _retype_if_other_alphabet(self, a: dict) -> None:
+        """Spotlight typed Korean while the phone's input language was English (#74 M5-2): the field then shows the
+        2-set keys as Latin letters ("tlrP" for 시계), and the actor spent four rounds clearing, switching and typing
+        again (0.5.7 device runs). With OCR in actor mode, look at the top band once the text settled: no Hangul there
+        but those letters are -> clear the field, switch the language and type again, inside this one action; the
+        step says `retyped`. Without OCR, or when the band is empty or unsure, nothing changes: the actor reads the
+        field as before."""
+        text = a["text"]
+        if not has_hangul(text) or self.ocr is None or getattr(self.ocr, "mode", "off") != "actor":
+            return
+        try:
+            probe = next(to_dubeolsik(run) for korean, run in script_runs(text) if korean)
+        except (StopIteration, ValueError):
+            return
+        await self.screen.settled(since=self._acted_at, **{**self.settle, **SPOTLIGHT_SETTLE})
+        try:
+            items = await self.ocr.read(self.screen.frame)
+        except Exception as e:  # noqa: BLE001 - an OCR hiccup must never cost the step
+            log.warning("OCR skipped: %s", str(e)[:120])
+            return
+        band = [it["text"] for it in items if it["y"] < SPOTLIGHT_FIELD]
+        if not band or any(has_hangul(t) for t in band) or not any(probe.casefold() in t.casefold() for t in band):
+            return
+        log.info("agent: Spotlight shows %r for %r: the input language was English; switching and typing again",
+                 probe, text)
+        await self.phone.key("cmd+a")
+        await self.phone.key("backspace")
+        await self.phone.key("ctrl+space")
+        await self.phone.type(text)
+        a["retyped"] = True
+
     async def _do(self, a: dict) -> None:
         p = lambda k: a[k] / 1000  # noqa: E731
         match a["action"]:
@@ -662,6 +695,7 @@ class Agent:
                 await self.phone.key("cmd+a")
                 await self.phone.key("backspace")
                 await self.phone.type(a["text"])
+                await self._retype_if_other_alphabet(a)
             case "key": await self.phone.key(a["combo"])
             case "home": await self.phone.go_home()
             case "back": await self.phone.go_back()
