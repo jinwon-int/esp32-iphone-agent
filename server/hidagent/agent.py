@@ -13,7 +13,7 @@ from .debug import Trace
 from .device import DeviceError
 from .gate import Gate
 from .gate import describe as gate_describe
-from .hangul import has_hangul, script_runs, to_dubeolsik
+from .hangul import compose_dubeolsik, has_hangul, script_runs, to_dubeolsik
 from .llm import LLM, image_size, shrink
 from .phone import DROP, HOME_SWIPE, LIFT, PARK, PICK_UP, SPOTLIGHT_SWIPE, GuardStop, Phone
 from .screen import Screen
@@ -682,21 +682,28 @@ class Agent:
 
     @staticmethod
     def _retype_plan(text: str) -> dict | None:
-        """What to look for at the next round's OCR read after Spotlight typed Korean (#74 M5-2): the first Korean
-        run and its 2-set keys ("tlrP" for 시계). None when there is nothing to check (no Korean, keys shorter than
-        RETYPE_PROBE: a single syllable's keys would match too easily)."""
-        if not has_hangul(text):
-            return None
+        """What to look for at the next round's OCR read after Spotlight typed (#74 M5-2, M5-3): the first run that
+        has letters, and what it looks like in the other input language — the Korean run's 2-set keys ("tlrP" for
+        시계, the phone was in English) or the English run's composed Hangul ("ㄴㅁㄹㅁ갸" for Safari, the phone was
+        in Korean; device 2026-10-22, two runs spent 2–4 steps each on it). None when there is nothing to check (no
+        letters, a probe shorter than RETYPE_PROBE: a single syllable's keys would match too easily)."""
         try:
-            run = next(r for korean, r in script_runs(text) if korean)
-            probe = to_dubeolsik(run)
+            if has_hangul(text):
+                run = next(r for korean, r in script_runs(text) if korean)
+                probe = to_dubeolsik(run)
+            else:
+                run = next(r for korean, r in script_runs(text) if any(c.isascii() and c.isalpha() for c in r))
+                probe = compose_dubeolsik(run)
+                if not has_hangul(probe):
+                    return None
         except (StopIteration, ValueError):
             return None
         return {"text": text, "run": run, "probe": probe} if len(probe) >= RETYPE_PROBE else None
 
     async def _retype_if_mistyped(self, items: list[dict]) -> bool:
-        """Spotlight typed Korean while the phone's input language was English: the field shows the 2-set keys as
-        Latin letters, and the actor spent four rounds clearing, switching and typing again (0.5.7 device runs).
+        """Spotlight typed in the wrong input language: Korean while the phone was in English shows the 2-set keys
+        as Latin letters (0.5.7 device runs: four rounds clearing, switching and typing again), English while it was
+        in Korean shows the keys' Hangul (M5-3, 2026-10-22 runs: 2–4 steps each).
         Checked on the OCR lines the round reads for the actor's prompt anyway (no settle or read of its own): the
         keys somewhere on the screen and the Korean run nowhere -> clear the field, switch the input language and
         type again, `retyped` on the spotlight's step, then the screen settles for a fresh read. The field's place
@@ -706,9 +713,10 @@ class Agent:
         if plan is None:
             return False
         texts = [it["text"] for it in items]
-        if any(plan["run"] in t for t in texts) or not any(plan["probe"].casefold() in t.casefold() for t in texts):
+        run, probe = plan["run"].casefold(), plan["probe"].casefold()
+        if any(run in t.casefold() for t in texts) or not any(probe in t.casefold() for t in texts):
             return False
-        log.info("agent: Spotlight shows %r for %r: the input language was English; switching and typing again",
+        log.info("agent: Spotlight shows %r for %r: the input language was the other one; switching and typing again",
                  plan["probe"], plan["text"])
         self._acted_at = time.time()
         await self.phone.key("cmd+a")
