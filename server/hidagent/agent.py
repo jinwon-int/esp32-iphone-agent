@@ -164,7 +164,7 @@ ACTIONS = {"tap": ("x", "y"), "swipe": ("x1", "y1", "x2", "y2"), "circle": ("x",
 TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the last step to the user
 NOTES_MAX = 8  # facts the actor keeps across rounds (the newest stay); a note never reaches the phone
 SPOTLIGHT_SETTLE = {"most": 1.5}  # Spotlight's suggestions keep moving: never wait the full settle (4 s seen on device)
-SPOTLIGHT_FIELD = 0.2  # Spotlight's search field sits in this top band of the screen (fraction of its height, #74 M5-2)
+RETYPE_PROBE = 3  # the typed Korean run's 2-set keys must be at least this long to be looked for on screen (#74 M5-2)
 DRAG_GUARD = os.environ.get("DRAG_GUARD", "observe").strip().lower() or "observe"  # off | observe | apply (#74 M8)
 MENU_LOOK = 0.3      # seconds after the pick before the guard looks (a quick-action menu takes a moment to draw)
 MENU_CHANGE = 12.0   # vision.page_change above this after the pick = a menu blurred the screen (an icon lift < 10)
@@ -647,16 +647,20 @@ class Agent:
     async def _retype_if_other_alphabet(self, a: dict) -> None:
         """Spotlight typed Korean while the phone's input language was English (#74 M5-2): the field then shows the
         2-set keys as Latin letters ("tlrP" for 시계), and the actor spent four rounds clearing, switching and typing
-        again (0.5.7 device runs). With OCR in actor mode, look at the top band once the text settled: no Hangul there
-        but those letters are -> clear the field, switch the language and type again, inside this one action; the
-        step says `retyped`. Without OCR, or when the band is empty or unsure, nothing changes: the actor reads the
-        field as before."""
+        again (0.5.7 device runs). With OCR in actor mode, read the screen once the text settled: those letters
+        somewhere on it and the Korean run nowhere -> clear the field, switch the language and type again, inside this
+        one action; the step says `retyped`. The field's place is not assumed (iOS puts Spotlight's field at the bottom
+        of the screen; 0.6.0 run 631415927a6f missed it in a top band). Short keys (under RETYPE_PROBE letters) are not
+        looked for. Without OCR, or when unsure, nothing changes: the actor reads the field as before."""
         text = a["text"]
         if not has_hangul(text) or self.ocr is None or getattr(self.ocr, "mode", "off") != "actor":
             return
         try:
-            probe = next(to_dubeolsik(run) for korean, run in script_runs(text) if korean)
+            korean_run = next(run for korean, run in script_runs(text) if korean)
+            probe = to_dubeolsik(korean_run)
         except (StopIteration, ValueError):
+            return
+        if len(probe) < RETYPE_PROBE:
             return
         await self.screen.settled(since=self._acted_at, **{**self.settle, **SPOTLIGHT_SETTLE})
         try:
@@ -664,8 +668,8 @@ class Agent:
         except Exception as e:  # noqa: BLE001 - an OCR hiccup must never cost the step
             log.warning("OCR skipped: %s", str(e)[:120])
             return
-        band = [it["text"] for it in items if it["y"] < SPOTLIGHT_FIELD]
-        if not band or any(has_hangul(t) for t in band) or not any(probe.casefold() in t.casefold() for t in band):
+        texts = [it["text"] for it in items]
+        if any(korean_run in t for t in texts) or not any(probe.casefold() in t.casefold() for t in texts):
             return
         log.info("agent: Spotlight shows %r for %r: the input language was English; switching and typing again",
                  probe, text)
