@@ -1296,9 +1296,12 @@ def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the
 
     class Phone:
         async def swipe(self, x1, y1, x2, y2, hold=True, step=None):
-            calls.append(((x1, y1, x2, y2), hold, step))
+            calls.append(("swipe", (x1, y1, x2, y2), hold, step))
+
+        async def flick(self, x1, y1, x2, y2, step=None):  # the board plays it (stroke), or a drag in these steps
+            calls.append(("flick", (x1, y1, x2, y2), step))
 
     ag = Agent(phone=Phone(), screen=None, actor=None, planner=None, trace=Trace(None))
     asyncio.run(ag._do({"action": "swipe", "x1": 700, "y1": 500, "x2": 300, "y2": 500}))  # page turn
     asyncio.run(ag._do({"action": "swipe", "x1": 500, "y1": 800, "x2": 500, "y2": 300}))  # a list: rest, then lift
-    assert calls == [((0.7, 0.5, 0.1, 0.5), False, 0.15), ((0.5, 0.8, 0.5, 0.3), True, None)]
+    assert calls == [("flick", (0.7, 0.5, 0.1, 0.5), 0.15), ("swipe", (0.5, 0.8, 0.5, 0.3), True, None)]

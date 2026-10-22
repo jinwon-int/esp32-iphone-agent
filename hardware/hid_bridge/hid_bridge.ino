@@ -6,6 +6,8 @@
 //   hidstat  (answers "ok resent=<n> failed=<n>": button reports sent again / given up, see confirmButtons, #60)
 //   scroll <v> <h> | type <ascii text> | key <combo, e.g. cmd+h, enter>
 //   at <x> <y>   (ABSOLUTE_POINTER builds only: put the pointer at x, y in 0..32767 across the screen)
+//   stroke <x1> <y1> <x2> <y2> <n>   (ABSOLUTE_POINTER builds only: press at x1, y1, n reports STEP_MS apart to
+//                x2, y2, release -- a quick finger stroke played by the board itself, see stroke())
 //   consumer <home | search | globe | keyboard | 0x0001..0x03ff>   (a consumer-page key, see consumerUsage)
 //   key combos may include "globe" (held as a modifier, e.g. globe+h)
 //   input-language keys for a hardware keyboard (#17-E): capslock | lang1 (alias hangul, HID 0x90 Hangul/English,
@@ -88,6 +90,7 @@ static_assert(sizeof(DEVICE_KEY) - 1 >= 16, "DEVICE_KEY must be at least 16 char
 const int STEP = 10;      // max pointer delta per report while moving
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
 const int HOME_REPORTS = 50;
+const long STROKE_MAX = 100;  // reports in one stroke: at most 0.8 s at STEP_MS, well inside the watchdog
 #ifndef ABSOLUTE_POINTER
 #define ABSOLUTE_POINTER 0  // 1: absolute pointer (POINTER_MODE=absolute on the server); 0: relative mouse
 #endif
@@ -277,6 +280,34 @@ bool confirmButtons() {
   return false;
 }
 
+#if ABSOLUTE_POINTER
+// A Home Screen page turn needs a quick stroke, but every command is one link round trip (about 170 ms over Bluetooth
+// LE, device 2026-10-22/23, #74): sent as single "at" reports the finger crawled and iOS snapped the page back. Here the
+// board plays the whole stroke itself at STEP_MS per report. The button is confirmed down before moving and always
+// let go at the end (#60: a lost release leaves a finger on the screen).
+String stroke(const String &arg) {
+  long x1, y1, x2, y2, n;
+  if (sscanf(arg.c_str(), "%ld %ld %ld %ld %ld", &x1, &y1, &x2, &y2, &n) != 5) return "err stroke needs x1 y1 x2 y2 n";
+  long lo = min(min(x1, y1), min(x2, y2)), hi = max(max(x1, y1), max(x2, y2));
+  if (lo < 0 || hi > ABS_MAX) return "err stroke needs positions in 0..32767";
+  if (n < 1 || n > STROKE_MAX) return "err stroke needs n in 1.." + String(STROKE_MAX);
+  moveAbs(x1, y1);
+  delay(STEP_MS);
+  mouse.press(MOUSE_LEFT);
+  if (!confirmButtons()) {
+    mouse.release(MOUSE_LEFT);
+    confirmButtons();
+    return "err stroke press not sent (usb busy)";
+  }
+  for (long i = 1; i <= n; i++) {
+    delay(STEP_MS);
+    moveAbs(x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n);
+  }
+  mouse.release(MOUSE_LEFT);
+  return confirmButtons() ? "ok" : "err stroke release not sent (usb busy)";
+}
+#endif
+
 uint8_t keyCode(const String &k) {
   if (k == "enter") return KEY_RETURN;
   if (k == "esc") return KEY_ESC;
@@ -367,13 +398,14 @@ String run(const String &line) {
     return "ok";
   }
   if (cmd == "scroll") { moveAbs(absX, absY, a, b); return "ok"; }
+  if (cmd == "stroke") return stroke(arg);
 #else
   if (cmd == "home") {  // slam the pointer into the top-left corner
     for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, -127); delay(2); }
     return "ok";
   }
   if (cmd == "move") { movePaced(a, b); return "ok"; }
-  if (cmd == "at") return "err absolute pointer off (build with ABSOLUTE_POINTER=1)";
+  if (cmd == "at" || cmd == "stroke") return "err absolute pointer off (build with ABSOLUTE_POINTER=1)";
   if (cmd == "scroll") { mouse.move(0, 0, a, b); return "ok"; }
 #endif
   if (cmd == "press") {
