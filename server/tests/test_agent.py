@@ -1263,26 +1263,42 @@ def test_a_guard_stop_hiccup_carries_the_menu_change(monkeypatch):
     assert ag._menu_change is None and ag.steps[-1]["action"] == "fail"
 
 
-def test_a_page_turn_swipe_is_flicked_other_swipes_rest_before_the_release():
-    """Device 2026-10-22: page swipes sent with the rest left the Home Screen between two pages (and in edit mode).
-    A long, flat swipe is a page turn -> hold=False like the home/back gestures; vertical or short swipes keep the
-    rest."""
+def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the_release():
+    """Device 2026-10-22: the actor's page swipes, sent in 0.03 steps (one board round trip each, ~170 ms), were slow
+    drags: a 0.4-wide one snapped back, an edge-to-edge one held the page for seconds and entered edit mode. A long,
+    flat swipe is a page turn -> one height, at least 0.6 wide, 0.15 steps, no rest (hold=False); vertical or short
+    swipes keep the rest and the default steps."""
     import asyncio
 
-    from hidagent.agent import PAGE_TURN_MAX_DY, PAGE_TURN_MIN_DX, Agent, page_turn
+    from hidagent.agent import (
+        PAGE_TURN_MARGIN,
+        PAGE_TURN_MAX_DY,
+        PAGE_TURN_MIN_DX,
+        PAGE_TURN_SPAN,
+        PAGE_TURN_STEP,
+        Agent,
+        page_turn,
+        page_turn_stroke,
+    )
     from hidagent.debug import Trace
 
     assert (PAGE_TURN_MIN_DX, PAGE_TURN_MAX_DY) == (0.35, 0.15)
+    assert (PAGE_TURN_SPAN, PAGE_TURN_STEP, PAGE_TURN_MARGIN) == (0.6, 0.15, 0.05)
     assert page_turn(0.9, 0.5, 0.1, 0.5) and page_turn(0.2, 0.4, 0.6, 0.5) and not page_turn(0.5, 0.8, 0.5, 0.3)
     assert not page_turn(0.3, 0.5, 0.6, 0.5) and not page_turn(0.1, 0.2, 0.9, 0.6)  # too short / too steep
+    assert page_turn_stroke(0.7, 0.5, 0.3, 0.5) == (0.7, 0.5, 0.1, 0.5)  # widened to 0.6, leftward from the start
+    assert page_turn_stroke(0.5, 0.5, 0.1, 0.52) == (0.65, 0.51, 0.05, 0.51)  # start moved inward to fit the span
+    assert page_turn_stroke(0.9, 0.5, 0.1, 0.5) == (0.9, 0.5, 0.1, 0.5)  # already wide enough: as the actor said
+    assert page_turn_stroke(0.2, 0.5, 0.6, 0.5) == (0.2, 0.5, 0.8, 0.5)  # rightward: the previous page
+    assert page_turn_stroke(0.6, 0.5, 0.95, 0.5) == (0.35, 0.5, 0.95, 0.5)  # start moved left to fit
 
     calls = []
 
     class Phone:
-        async def swipe(self, x1, y1, x2, y2, hold=True):
-            calls.append(((x1, y1, x2, y2), hold))
+        async def swipe(self, x1, y1, x2, y2, hold=True, step=None):
+            calls.append(((x1, y1, x2, y2), hold, step))
 
     ag = Agent(phone=Phone(), screen=None, actor=None, planner=None, trace=Trace(None))
-    asyncio.run(ag._do({"action": "swipe", "x1": 900, "y1": 500, "x2": 100, "y2": 500}))  # page turn: flick
+    asyncio.run(ag._do({"action": "swipe", "x1": 700, "y1": 500, "x2": 300, "y2": 500}))  # page turn
     asyncio.run(ag._do({"action": "swipe", "x1": 500, "y1": 800, "x2": 500, "y2": 300}))  # a list: rest, then lift
-    assert calls == [((0.9, 0.5, 0.1, 0.5), False), ((0.5, 0.8, 0.5, 0.3), True)]
+    assert calls == [((0.7, 0.5, 0.1, 0.5), False, 0.15), ((0.5, 0.8, 0.5, 0.3), True, None)]

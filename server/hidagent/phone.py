@@ -354,12 +354,14 @@ class Phone:
         await asyncio.sleep(TAP_GAP)
         await self._park()
 
-    async def swipe(self, x1: float, y1: float, x2: float, y2: float, hold: bool = True) -> None:
-        await self.drag([(x1, y1), (x2, y2)], hold)
+    async def swipe(self, x1: float, y1: float, x2: float, y2: float, hold: bool = True,
+                    step: float | None = None) -> None:
+        await self.drag([(x1, y1), (x2, y2)], hold, step=step)
 
     async def drag(self, points: list[tuple[float, float]], hold: bool = True, pick: float = 0.0,
                    rest: float | None = None, aim: bool = False, stops: list[float] | None = None,
-                   lift: float = 0.0, guard: Callable[[], Awaitable[bool]] | None = None) -> None:
+                   lift: float = 0.0, guard: Callable[[], Awaitable[bool]] | None = None,
+                   step: float | None = None) -> None:
         """Press at the first point, move through the rest, release: one continuous stroke.
 
         hold=True rests at the end first, so lists and pickers stop exactly there instead of flinging on.
@@ -373,6 +375,9 @@ class Phone:
         LIFT_DIST of the way is covered slowly, right after ``pick`` (iOS 27 kept the item's menu open when the
         pointer raced off at once, #35). ``guard``: awaited after ``pick``; True means a menu opened under the press
         (#35, #74 M8): the button is released where it is, nothing is carried, and GuardStop is raised.
+        ``step``: screen fraction per absolute report while gliding (default ABS_STEP). Every report is one board
+        round trip (about 170 ms on the device, 2026-10-22), so a long stroke with small steps is a slow drag; a page
+        turn passes a bigger step to stay a stroke.
         """
         if stops is not None and len(stops) != len(points) - 2:
             raise ValueError(f"stops needs one rest per via point: {len(points) - 2}, got {len(stops)}")
@@ -387,7 +392,7 @@ class Phone:
             if lift and len(points) > 1:
                 last = await self._lift(points[0], points[1], lift)
             for n_point, (x, y) in enumerate(points[1:]):
-                last = await self._glide(last, (x, y))
+                last = await self._glide(last, (x, y), step)
                 if stops and n_point < len(stops) and stops[n_point]:
                     await asyncio.sleep(stops[n_point])
             pause = rest if rest is not None else (HOLD if hold else 0)
@@ -415,12 +420,13 @@ class Phone:
             await asyncio.sleep(seconds / LIFT_STEPS)
         return x, y
 
-    async def _glide(self, last: tuple[float, float], to: tuple[float, float]) -> tuple[float, float]:
+    async def _glide(self, last: tuple[float, float], to: tuple[float, float],
+                     step: float | None = None) -> tuple[float, float]:
         """Move with the button down: small absolute steps (one jump would be a teleport, not a finger), or one
         relative move (never re-homing mid-gesture)."""
         x, y = to
         if self.absolute:
-            n = max(1, math.ceil(math.dist(last, to) / ABS_STEP - 1e-9))  # 0.3 / 0.03 is 10.000…02
+            n = max(1, math.ceil(math.dist(last, to) / (step or ABS_STEP) - 1e-9))  # 0.3 / 0.03 is 10.000…02
             for i in range(1, n + 1):
                 await self._at(last[0] + (x - last[0]) * i / n, last[1] + (y - last[1]) * i / n)
                 await asyncio.sleep(ABS_STEP_S)
