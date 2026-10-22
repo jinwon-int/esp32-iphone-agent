@@ -1081,6 +1081,7 @@ def test_drag_guard_observes_by_default_and_stops_only_in_apply(monkeypatch, tmp
     monkeypatch.setattr(agent_mod, "DRAG_GUARD", "apply")
     ag.screen.frames = [b"a", b"b"]
     assert asyncio.run(ag._drag_guard(act)()) is True  # apply: a menu-sized change stops the drag
+    assert ag._menu_change == 30.0  # kept for the hiccup that replaces the step (#74 M8)
     monkeypatch.setattr(agent_mod, "DRAG_GUARD", "off")
     assert ag._drag_guard(act) is None
 
@@ -1213,3 +1214,40 @@ def test_spotlight_korean_mistyped_is_typed_again_at_the_next_rounds_ocr_read():
     agent = run("시계", [[line("tlrP", 0.92)]], mode="api")  # OCR not for the actor: no read, no check
     assert calls[len(typed):] == [] and "retyped" not in agent.steps[-1] and agent._retype is None
     assert run("앱들", [[line("doqemf", 0.92)], []]).steps[-1]["retyped"] is True  # 6 keys: typed again
+
+
+def test_a_guard_stop_hiccup_carries_the_menu_change(monkeypatch):
+    """#74 M8: the drag the guard stopped is recorded as a hiccup; its guard_change rides on that record (device
+    2026-10-22: apply stopped 4 drags and no number survived). Any other hiccup carries no guard_change."""
+    import asyncio
+
+    from hidagent.agent import Agent
+    from hidagent.debug import Trace
+    from hidagent.phone import GuardStop
+
+    class Screen:
+        live = True
+        frame = b"f"
+
+        async def settled(self, *a, **k):
+            return None
+
+    ag = Agent(phone=None, screen=Screen(), actor=None, planner=None, trace=Trace(None))
+    ag._reset_run("move the app")
+    ag.max_steps, ag.max_failures = 2, 9
+    errors = [GuardStop("a menu opened under the press: released in place, nothing moved"), RuntimeError("bad reply")]
+
+    async def replan(stuck=False):
+        return None
+
+    async def step():
+        ag._menu_change = 20.0 if isinstance(errors[0], GuardStop) else ag._menu_change
+        raise errors.pop(0)
+
+    monkeypatch.setattr(ag, "_replan", replan)
+    monkeypatch.setattr(ag, "_step", step)
+    asyncio.run(ag._run())
+    hiccups = [s for s in ag.steps if s["action"] == "hiccup"]
+    assert [h.get("guard_change") for h in hiccups] == [20.0, None]
+    assert hiccups[0]["reason"].startswith("a menu opened under the press")
+    assert ag._menu_change is None and ag.steps[-1]["action"] == "fail"
