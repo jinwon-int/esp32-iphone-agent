@@ -9,7 +9,7 @@ import asyncio
 import pytest
 
 from hidagent.device import DeviceError
-from hidagent.hangul import has_hangul, to_dubeolsik
+from hidagent.hangul import compose_dubeolsik, has_hangul, to_dubeolsik
 
 
 @pytest.mark.parametrize("text, keys", [
@@ -25,6 +25,27 @@ from hidagent.hangul import has_hangul, to_dubeolsik
 ])
 def test_hangul_becomes_dubeolsik_keys(text, keys):
     assert to_dubeolsik(text) == keys
+
+
+@pytest.mark.parametrize("text, keys", [
+    ("설정", "tjfwjd"), ("갈비", "rkfql"), ("괜찮아", "rhoscksgdk"), ("테스트플라이트", "xptmxmvmffkdlxm"),
+    ("까치 꽃 쌀", "Rkcl Rhc Tkf"), ("얘기 예", "dOrl dP"), ("값", "rkqt"), ("카톡 123!", "zkxhr 123!"),
+    ("ㅋㅋ ㅠ", "zz b"),
+])
+def test_dubeolsik_keys_compose_back_into_the_text(text, keys):
+    assert compose_dubeolsik(keys) == text  # the IME's composition, the reverse of to_dubeolsik
+
+
+@pytest.mark.parametrize("keys, shown", [
+    ("Safari", "ㄴㅁㄹㅁ갸"),   # device 2026-10-22: English typed with Korean active (S -> ㄴ, no double for ㄴ)
+    ("tlrP", "시계"),           # the keys of 시계: a final ㄱ becomes the next initial when ㅖ follows
+    ("weather", "ㅈㄷㅁ솓ㄱ"),  # consonants without a vowel stay apart; ㄷ ends 소; ㄷㄱ is no compound final
+    ("Clock", "치ㅐ차"),        # a second vowel that makes no compound starts over as a bare vowel
+    ("rkqtl", "갑시"),          # a compound final ㅄ splits: ㅂ stays, ㅅ carries into 시
+    ("go 7", "해 7"),           # digits and spaces pass through
+])
+def test_english_keys_show_as_the_imes_hangul(keys, shown):
+    assert compose_dubeolsik(keys) == shown
 
 
 def test_latin_letters_cannot_share_one_typing_with_korean():

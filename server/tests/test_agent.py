@@ -1216,6 +1216,14 @@ def test_spotlight_korean_mistyped_is_typed_again_at_the_next_rounds_ocr_read():
     agent = run("시계", [[line("tlrP", 0.92)]], mode="api")  # OCR not for the actor: no read, no check
     assert calls[len(typed):] == [] and "retyped" not in agent.steps[-1] and agent._retype is None
     assert run("앱들", [[line("doqemf", 0.92)], []]).steps[-1]["retyped"] is True  # 6 keys: typed again
+    # M5-3, the other direction: English typed while the phone was in Korean shows the keys' Hangul
+    agent = run("Safari", [[line("Siri 제안", 0.3), line("ㄴㅁㄹㅁ갸", 0.92)], [line("Safari", 0.92)]])
+    assert agent.steps[-1]["retyped"] is True and agent._retype is None
+    assert calls[-6:] == [("key", "cmd+a"), ("key", "backspace"), ("key", "ctrl+space"), ("type", "Safari"),
+                          ("settled", 1.5), "ocr"]
+    assert "retyped" not in run("Safari", [[line("safari", 0.92)]]).steps[-1]  # the English is on screen (any case)
+    assert "retyped" not in run("Go", [[line("해", 0.92)]]).steps[-1]  # one syllable: too short to look for
+    assert "retyped" not in run("123", [[line("123", 0.92)]]).steps[-1]  # no letters: nothing to check
 
 
 def test_a_guard_stop_hiccup_carries_the_menu_change(monkeypatch):

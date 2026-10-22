@@ -56,6 +56,65 @@ def to_dubeolsik(text: str) -> str:
 
 
 
+_KEY_JAMO = {v: k for k, v in _KEY.items() if len(v) == 1}  # one key -> the jamo it types (shifted keys included)
+_COMPOUND_VOWEL = {("ㅗ", "ㅏ"): "ㅘ", ("ㅗ", "ㅐ"): "ㅙ", ("ㅗ", "ㅣ"): "ㅚ", ("ㅜ", "ㅓ"): "ㅝ", ("ㅜ", "ㅔ"): "ㅞ",
+                   ("ㅜ", "ㅣ"): "ㅟ", ("ㅡ", "ㅣ"): "ㅢ"}
+_COMPOUND_FINAL = {("ㄱ", "ㅅ"): "ㄳ", ("ㄴ", "ㅈ"): "ㄵ", ("ㄴ", "ㅎ"): "ㄶ", ("ㄹ", "ㄱ"): "ㄺ", ("ㄹ", "ㅁ"): "ㄻ",
+                   ("ㄹ", "ㅂ"): "ㄼ", ("ㄹ", "ㅅ"): "ㄽ", ("ㄹ", "ㅌ"): "ㄾ", ("ㄹ", "ㅍ"): "ㄿ", ("ㄹ", "ㅎ"): "ㅀ",
+                   ("ㅂ", "ㅅ"): "ㅄ"}
+_SPLIT_FINAL = {v: k for k, v in _COMPOUND_FINAL.items()}
+
+
+def compose_dubeolsik(keys: str) -> str:
+    """What the Korean 2-set IME shows when `keys` are typed with the Korean input language active — the reverse of
+    `to_dubeolsik`, and what English text becomes when the phone was left in Korean ("Safari" -> "ㄴㅁㄹㅁ갸", device
+    2026-10-22). Composes like the IME: an initial, then a medial (compound vowels from two keys), then a final
+    (compound finals from two keys); a vowel after a final takes that final (its second part) as the next initial; a
+    consonant that cannot continue the syllable starts a new one; jamo that never meet a partner stay as they are.
+    Shifted keys without a double consonant type the plain one (S -> ㄴ); other characters pass through."""
+    out: list[str] = []
+    ini = med = fin = None
+
+    def flush() -> None:
+        nonlocal ini, med, fin
+        if ini and med:
+            out.append(chr(_BASE + _INITIAL.index(ini) * 588 + _MEDIAL.index(med) * 28 + _FINAL.index(fin or "")))
+        else:
+            out.extend(j for j in (ini, med) if j)
+        ini = med = fin = None
+
+    for ch in keys:
+        jamo = _KEY_JAMO.get(ch) or (_KEY_JAMO.get(ch.lower()) if ch.isascii() and ch.isalpha() else None)
+        if jamo is None:
+            flush()
+            out.append(ch)
+        elif jamo in _MEDIAL:
+            if ini and not med:
+                med = jamo
+            elif med and not fin and (med, jamo) in _COMPOUND_VOWEL:
+                med = _COMPOUND_VOWEL[(med, jamo)]
+            elif ini and med and fin:
+                kept, carry = _SPLIT_FINAL.get(fin, ("", fin))
+                fin = kept or None
+                flush()
+                ini, med = carry, jamo
+            else:
+                flush()
+                med = jamo
+        else:
+            if ini is None and med is None:
+                ini = jamo
+            elif ini and med and not fin and jamo in _FINAL:
+                fin = jamo
+            elif ini and med and fin and (fin, jamo) in _COMPOUND_FINAL:
+                fin = _COMPOUND_FINAL[(fin, jamo)]
+            else:
+                flush()
+                ini = jamo
+    flush()
+    return "".join(out)
+
+
 def script_runs(text: str) -> list[tuple[bool, str]]:
     """`text` as (korean, run) pieces: a run changes where a Hangul character follows a Latin letter or the reverse.
     Digits, spaces and symbols belong to the run they are in; leading ones go with the first letter that follows
