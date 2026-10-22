@@ -1155,10 +1155,10 @@ def test_spotlight_types_again_when_korean_came_out_in_latin_letters():
 
     assert "retyped" not in run("시계", [[line("시계", 0.08)]])  # Korean came out right
     assert calls[-2:] == [("settled", 1.5), "ocr"]
-    assert "retyped" not in run("시계", [[line("tlrP", SPOTLIGHT_FIELD + 0.1)]])  # the letters are not in the field band
+    assert "retyped" not in run("시계", [[line("tlrP", SPOTLIGHT_FIELD + 0.1)]])  # the letters are below the field
     assert "retyped" not in run("시계", [[]])  # nothing read: unsure, leave it to the actor
     assert "retyped" not in run("시계", [[line("abc", 0.08)]])  # other letters: not this mistake
     assert "retyped" not in run("Settings", [[line("Settings", 0.08)]]) and calls == [*typed[:-1], ("type", "Settings")]
     assert "retyped" not in run("시계", [[line("tlrP", 0.08)]], mode="api") and calls == typed  # OCR not for the actor
-    assert "retyped" not in run("교보eBook", [[line("ryqhebook", 0.08)]])  # "ryqh" is in it: typed again
+    assert run("교보eBook", [[line("ryqhebook", 0.08)]])["retyped"] is True  # "ryqh" is in it: typed again
     assert calls[-1] == ("type", "교보eBook")
