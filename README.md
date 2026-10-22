@@ -318,6 +318,7 @@ running it; the server drops the link on a wrong reply tag. Long text is typed i
 | `home` | Push the pointer into the top-left corner (a known position) |
 | `move <dx> <dy>` | Relative pointer move, at a constant pace so iOS pointer acceleration stays predictable |
 | `at <x> <y>` | Absolute pointer builds only: put the pointer at x, y (0-32767 across the screen). There, `home` goes to the top-left corner and `move` shifts the last position |
+| `stroke <x1> <y1> <x2> <y2> <n>` | Absolute pointer builds only: press at x1, y1, move to x2, y2 in n reports 8 ms apart (n ≤ 100), release — one quick stroke the board plays itself, so the link's round trip does not slow the finger (Home Screen page turns, #74). Older firmware answers `err unknown command`; the server and the app then drag instead |
 | `press` / `release` / `click` | Left button down / up / both |
 | `scroll <v> <h>` | Scroll wheel |
 | `type <text>` | Type ASCII text |

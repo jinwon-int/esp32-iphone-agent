@@ -512,3 +512,64 @@ def test_absolute_glide_step_sets_how_many_reports_a_stroke_takes(tmp_path):
     wide = stroke(phone.device.sent)
     assert len(default) == 20 and len(wide) == 4  # 0.6 / 0.03 vs 0.6 / 0.15
     assert all(c.startswith("at ") for c in default + wide)
+
+
+def test_a_flick_is_one_board_stroke_on_an_absolute_board(tmp_path):
+    """#74 (device 2026-10-23, run a9294c662ca6): report by report, a page turn crawled at one link round trip per
+    report and iOS snapped it back; the board plays the stroke itself: one command, then the pointer parks."""
+    from hidagent.phone import Phone
+    phone = Phone(FakeDevice(), tmp_path / "calibration.json", pointer="absolute")
+    asyncio.run(phone.flick(0.7, 0.5, 0.1, 0.5, step=0.15))
+    sent = phone.device.sent
+    assert "stroke 22937 16384 3277 16384 12" in sent and "press" not in sent and "release" not in sent
+    assert sent[sent.index("stroke 22937 16384 3277 16384 12") - 1] == "at 22937 16384"  # the pointer is there first
+    assert sent[-1] == PARK_AT
+
+
+class NoStrokeDevice(FakeDevice):
+    def __init__(self, reply="err unknown command"):
+        super().__init__()
+        self.reply = reply
+
+    async def send(self, command):
+        self.sent.append(command)
+        if command.startswith("stroke"):
+            from hidagent.device import DeviceError
+            raise DeviceError(self.reply)
+
+
+def test_a_board_without_stroke_gets_the_flick_as_a_drag_until_the_next_link(tmp_path):
+    """Older firmware answers "err unknown command": the stroke is dragged in the given steps, and the board is not
+    asked again until it reconnects (a reflashed board comes back on a new link)."""
+    from hidagent.phone import Phone
+    phone = Phone(NoStrokeDevice(), tmp_path / "calibration.json", pointer="absolute")
+    asyncio.run(phone.flick(0.7, 0.5, 0.1, 0.5, step=0.15))
+    sent = phone.device.sent
+    down = sent[sent.index("press") + 1:sent.index("release")]
+    assert len(down) == 4 and all(c.startswith("at ") for c in down)  # 0.6 / 0.15, no rest
+    phone.device.sent.clear()
+    asyncio.run(phone.flick(0.7, 0.5, 0.1, 0.5, step=0.15))
+    assert not any(c.startswith("stroke") for c in phone.device.sent) and "press" in phone.device.sent
+    phone.device.links += 1
+    phone.device.sent.clear()
+    asyncio.run(phone.flick(0.7, 0.5, 0.1, 0.5, step=0.15))
+    assert any(c.startswith("stroke") for c in phone.device.sent)
+
+
+def test_a_stroke_that_fails_otherwise_is_not_retried_as_a_drag(tmp_path):
+    """Only a missing command falls back: a stroke that failed on the board (USB busy, link lost) raises, as every
+    gesture does, instead of pressing a second time."""
+    from hidagent.device import DeviceError
+    from hidagent.phone import Phone
+    phone = Phone(NoStrokeDevice("err stroke release not sent (usb busy)"), tmp_path / "calibration.json",
+                  pointer="absolute")
+    with pytest.raises(DeviceError, match="usb busy"):
+        asyncio.run(phone.flick(0.7, 0.5, 0.1, 0.5, step=0.15))
+    assert "press" not in phone.device.sent
+
+
+def test_a_relative_pointer_flicks_as_a_drag(tmp_path):
+    phone, device = make_phone(tmp_path)
+    asyncio.run(phone.flick(0.7, 0.5, 0.1, 0.5, step=0.15))
+    assert not any(c.startswith("stroke") for c in device.sent)
+    assert "press" in device.sent and device.sent[-1] == "release"

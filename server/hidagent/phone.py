@@ -52,6 +52,7 @@ ABS_TAP_SETTLE = 0.03   # seconds the absolute pointer rests on the target befor
 ABS_WAKE_AFTER = 2.0    # seconds without a pointer report after which iOS may have hidden the pointer
 ABS_WAKE_S = 0.3        # after such a pause: report the target once, wait this long, then act (#35: the first
                         # report only woke the pointer, so a tap clicked at the old spot and a swipe became a hold)
+STROKE_REPORTS = 12     # reports in a board-played stroke (flick), STEP_MS (8 ms) apart: about 0.1 s, a flick to iOS
 LIFT_DIST = 0.03        # screen fraction of a drag's first stretch that ``lift`` slows down, so iOS lifts the item
 LIFT_STEPS = 6          # reports (absolute) or moves (relative) over that stretch
 EDGE_X = (0.015, 0.985) # where carry() holds an item so iOS turns the page (left, right)
@@ -155,6 +156,7 @@ class Phone:
         self._pos = None  # pointer position in mouse units; None = unknown
         self._moves = 0
         self._link = 0  # device.links when the pointer was last homed
+        self._no_stroke = None  # device.links when the board answered that it has no "stroke" (older firmware)
         # where the pointer really landed (seen on screen) for the screen fraction we aimed at, per axis;
         # a straight-line fit through them corrects every later move, so taps get better as the agent works
         self._seen = {axis: deque(map(tuple, (saved or {}).get("seen", {}).get(axis, [])), maxlen=12)
@@ -357,6 +359,30 @@ class Phone:
     async def swipe(self, x1: float, y1: float, x2: float, y2: float, hold: bool = True,
                     step: float | None = None) -> None:
         await self.drag([(x1, y1), (x2, y2)], hold, step=step)
+
+    async def flick(self, x1: float, y1: float, x2: float, y2: float, step: float | None = None) -> None:
+        """A quick stroke with no rest before the release: a Home Screen page turn.
+
+        An absolute board plays it itself ("stroke": press, STROKE_REPORTS reports 8 ms apart, release — one command),
+        because every command is one link round trip (about 170 ms over Bluetooth LE, #74): sent report by report
+        the finger crawled and iOS snapped the page back. A board without "stroke" (older firmware: "err unknown
+        command", remembered until the next link) or a relative pointer gets the stroke as a drag in ``step`` steps.
+        """
+        if self.absolute and self._no_stroke != self.device.links:
+            await self.point(x1, y1)  # wakes a hidden pointer first (ABS_WAKE_AFTER)
+            ax1, ay1, ax2, ay2 = (round(min(max(t, 0), 1) * ABS_MAX) for t in (x1, y1, x2, y2))
+            try:
+                await self.device.send(f"stroke {ax1} {ay1} {ax2} {ay2} {STROKE_REPORTS}")
+            except DeviceError as e:
+                if "unknown command" not in str(e):
+                    raise
+                self._no_stroke = self.device.links
+                log.info("board has no stroke command (older firmware): page turns are dragged")
+            else:
+                self._reported = time.monotonic()
+                await self._park()
+                return
+        await self.swipe(x1, y1, x2, y2, hold=False, step=step)
 
     async def drag(self, points: list[tuple[float, float]], hold: bool = True, pick: float = 0.0,
                    rest: float | None = None, aim: bool = False, stops: list[float] | None = None,

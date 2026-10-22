@@ -197,7 +197,9 @@ PAGE_TURN_MAX_DY = 0.15
 # How a page turn is sent (device 2026-10-22, run b560226ca846): every absolute report is one board round trip of
 # about 170 ms, so the actor's 0.4-wide swipe in 0.03 steps was a 2.4 s drag that iOS snapped back (under half the
 # width), and an edge-to-edge one held the page for seconds and entered edit mode. A page turn covers at least
-# PAGE_TURN_SPAN of the width in PAGE_TURN_STEP steps, PAGE_TURN_MARGIN from the edges, at one height.
+# PAGE_TURN_SPAN of the width, PAGE_TURN_MARGIN from the edges, at one height, as Phone.flick: the board plays it
+# ("stroke", 8 ms per report; run a9294c662ca6 showed 0.15 steps at the link's pace still snapped back), and a board
+# without "stroke" gets it dragged in PAGE_TURN_STEP steps.
 PAGE_TURN_SPAN = 0.6
 PAGE_TURN_STEP = 0.15
 PAGE_TURN_MARGIN = 0.05
@@ -763,10 +765,9 @@ class Agent:
         p = lambda k: a[k] / 1000  # noqa: E731
         match a["action"]:
             case "tap": await self.phone.tap(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
-            case "swipe":  # lists and pickers stop where the finger stops; a page turn is one wide, quick stroke
+            case "swipe":  # lists and pickers stop where the finger stops; a page turn is one wide, quick flick
                 if page_turn(p("x1"), p("y1"), p("x2"), p("y2")):
-                    await self.phone.swipe(*page_turn_stroke(p("x1"), p("y1"), p("x2"), p("y2")), hold=False,
-                                           step=PAGE_TURN_STEP)
+                    await self.phone.flick(*page_turn_stroke(p("x1"), p("y1"), p("x2"), p("y2")), step=PAGE_TURN_STEP)
                 else:
                     await self.phone.swipe(p("x1"), p("y1"), p("x2"), p("y2"))
             case "longpress": await self.phone.long_press(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
