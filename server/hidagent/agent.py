@@ -165,7 +165,9 @@ TERMINAL = ("done", "fail", "confirm")  # the run ends here; confirm hands the l
 NOTES_MAX = 8  # facts the actor keeps across rounds (the newest stay); a note never reaches the phone
 SPOTLIGHT_SETTLE = {"most": 1.5}  # Spotlight's suggestions keep moving: never wait the full settle (4 s seen on device)
 RETYPE_PROBE = 3  # the typed Korean run's 2-set keys must be at least this long to be looked for on screen (#74 M5-2)
-DRAG_GUARD = os.environ.get("DRAG_GUARD", "observe").strip().lower() or "observe"  # off | observe | apply (#74 M8)
+# off | observe | apply (#74 M8). Default apply since the 2026-10-22 device runs: a quick-action menu under the press
+# measured 37.4 while normal edit-mode lifts stayed 0.7–2.0, and the stopped drags never touched a menu item.
+DRAG_GUARD = os.environ.get("DRAG_GUARD", "apply").strip().lower() or "apply"
 
 
 def _seconds_env(name: str, default: float, most: float = 3.0) -> float:
@@ -660,9 +662,9 @@ class Agent:
 
     def _drag_guard(self, a: dict):
         """The drag's menu guard (#35, #74 M8): after the pick, how much did the screen change? A quick-action menu
-        blurs the whole screen (page_change well above a lifted icon's). observe (default) records it on the step as
-        guard_change; apply also stops the drag above MENU_CHANGE — released in place, the actor sees the menu next.
-        Measured values from observe runs set the threshold before apply is ever on."""
+        blurs the whole screen (page_change well above a lifted icon's). observe records it on the step as
+        guard_change; apply (default) also stops the drag above MENU_CHANGE — released in place, the actor sees the
+        menu next. Observe runs set the threshold (lift < 10, menu 37.4 on device) before apply became the default."""
         if DRAG_GUARD == "off" or self.screen is None:
             return None
         before = self.screen.frame

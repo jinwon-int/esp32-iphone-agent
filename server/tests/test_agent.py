@@ -1056,7 +1056,7 @@ def test_spotlight_never_waits_the_full_settle():
     assert waits == [{"quiet": 0.3, "most": 1.5}] and agent.steps[-1]["settle_s"] == 0.1
     asyncio.run(agent._settle())
     assert waits[-1] == {"quiet": 0.3}
-def test_drag_guard_observes_by_default_and_stops_only_in_apply(monkeypatch, tmp_path):
+def test_drag_guard_applies_by_default_observe_only_measures(monkeypatch, tmp_path):
     import asyncio
 
     from hidagent import agent as agent_mod
@@ -1072,8 +1072,10 @@ def test_drag_guard_observes_by_default_and_stops_only_in_apply(monkeypatch, tmp
         def frame(self):
             return self.frames[0] if len(self.frames) == 1 else self.frames.pop(0)
 
+    assert agent_mod.DRAG_GUARD == "apply"  # the default since the 2026-10-22 device runs (#74 M8 §2-5)
     monkeypatch.setattr(agent_mod.vision, "page_change", lambda before, after: 30.0 if before != after else 0.0)
     monkeypatch.setattr(agent_mod, "MENU_LOOK", 0)
+    monkeypatch.setattr(agent_mod, "DRAG_GUARD", "observe")
     ag = Agent(phone=None, screen=Screen(), actor=None, planner=None, trace=Trace(None))
     act = {"action": "drag", "x1": 100, "y1": 100, "x2": 600, "y2": 600}
     guard = ag._drag_guard(act)
