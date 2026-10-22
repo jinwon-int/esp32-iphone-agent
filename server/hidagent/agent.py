@@ -166,7 +166,26 @@ NOTES_MAX = 8  # facts the actor keeps across rounds (the newest stay); a note n
 SPOTLIGHT_SETTLE = {"most": 1.5}  # Spotlight's suggestions keep moving: never wait the full settle (4 s seen on device)
 RETYPE_PROBE = 3  # the typed Korean run's 2-set keys must be at least this long to be looked for on screen (#74 M5-2)
 DRAG_GUARD = os.environ.get("DRAG_GUARD", "observe").strip().lower() or "observe"  # off | observe | apply (#74 M8)
-MENU_LOOK = 0.3      # seconds after the pick before the guard looks (a quick-action menu takes a moment to draw)
+
+
+def _seconds_env(name: str, default: float, most: float = 3.0) -> float:
+    """A gesture timing from the environment, in seconds: blank, unreadable or outside 0..most keeps the default."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if 0 <= value <= most else default
+
+
+# How long the actor's drag holds still after the press before the guard looks and the item is carried (#74 M8).
+# Device 2026-10-22: with the default 0.5 s a drag outside edit mode never showed the guard a menu (guard_change
+# 0.9–1.6, the press ended as a tap); 2026-10-17 (#35) pick 0.9–1.0 opened the quick-action menu. DRAG_PICK lets a
+# measurement run hold longer; DRAG_MENU_LOOK gives the menu time to draw before the guard reads the screen.
+DRAG_PICK = _seconds_env("DRAG_PICK", PICK_UP)
+MENU_LOOK = _seconds_env("DRAG_MENU_LOOK", 0.3)  # seconds after the pick before the guard looks (a menu takes a moment)
 MENU_CHANGE = 12.0   # vision.page_change above this after the pick = a menu blurred the screen (an icon lift < 10)
 NOTE_CHARS = 120
 TEXT_ARGS = ("text", "combo", "answer", "reason")
@@ -697,7 +716,7 @@ class Agent:
             case "swipe": await self.phone.swipe(p("x1"), p("y1"), p("x2"), p("y2"))
             case "longpress": await self.phone.long_press(p("x"), p("y"), aim=a.get("precise", False) or self._missed())
             case "drag":  # lift the item, carry it, rest on the target; aim first: picking the wrong icon costs more
-                await self.phone.drag([(p("x1"), p("y1")), (p("x2"), p("y2"))], pick=PICK_UP, rest=DROP, aim=True,
+                await self.phone.drag([(p("x1"), p("y1")), (p("x2"), p("y2"))], pick=DRAG_PICK, rest=DROP, aim=True,
                                       lift=LIFT, guard=self._drag_guard(a))
             case "path": await self.phone.drag([(x / 1000, y / 1000) for x, y in a["points"]])
             case "circle": await self.phone.drag(circle(p("x"), p("y"), p("r"), self.screen.aspect))

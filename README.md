@@ -186,6 +186,9 @@ Set in `server/.env` (see [`.env.example`](server/.env.example)):
 | `PUSH_HOST` / `PUSH_PORT` | — / `8891` | `push` only: the VPN address (e.g. this computer's Tailscale `100.x` address) and port the app connects to. Required; a wildcard such as `0.0.0.0` is refused |
 | `PUSH_TOKEN` | generated | `push` only: the token the app proves; if unset, one is generated and kept in `~/.hidagent/push_token` |
 | `HOST` / `PORT` | `0.0.0.0` / `8890` | Web UI address and port (`HOST=127.0.0.1`: this computer only) |
+| `DRAG_GUARD` | `observe` | The actor's drag menu guard (#74 M8): `off`, `observe` (record the screen change after the pick as `guard_change`), `apply` (release in place when a quick-action menu opened under the press) |
+| `DRAG_PICK` | `0.5` (`PICK_UP`) | Seconds the actor's drag holds still after the press before the guard looks and the item is carried; 0–3. Device 2026-10-22: 0.5 never opened a menu outside edit mode, 2026-10-17 0.9–1.0 did |
+| `DRAG_MENU_LOOK` | `0.3` | Seconds after that hold before the guard reads the screen (a menu takes a moment to draw); 0–3 |
 | `DEVICE_HOST` / `DEVICE_PORT` | `0.0.0.0` / `7300` | Address and port the board connects to |
 | `HIDAGENT_DATA` | `~/.hidagent` | Calibration, secrets and debug traces |
 | `GATE_MODE` | `off` | `observe`: ask Jev about each action and record the answer, see "Action gate" |
