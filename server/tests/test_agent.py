@@ -1094,3 +1094,71 @@ def test_prompts_name_the_resting_pointer_so_nobody_treats_it_as_a_touch():
         assert "far left edge, halfway down the screen" in text and "resting after a gesture" in text
     assert "never tap, wait or swipe to make it go away" in ACTOR_PROMPT
     assert "never count it as something pressed, open or wrong" in CHECK_PROMPT
+
+
+def test_spotlight_types_again_when_korean_came_out_in_latin_letters():
+    """#74 M5-2: with OCR in actor mode the spotlight macro reads the search field after typing; "tlrP" where 시계
+    was typed means the input language was English -> clear, switch, type again, `retyped` on the step. No OCR,
+    Hangul in the band, an empty band or other letters: nothing more happens."""
+    import asyncio
+
+    from hidagent.agent import META, SPOTLIGHT_FIELD, Agent, _key
+    from hidagent.debug import Trace
+
+    calls = []
+
+    class Phone:
+        async def go_home(self):
+            calls.append("home")
+
+        async def swipe(self, x1, y1, x2, y2, hold=True):
+            calls.append("swipe")
+
+        async def key(self, combo):
+            calls.append(("key", combo))
+
+        async def type(self, text):
+            calls.append(("type", text))
+
+    class Screen:
+        frame = b"jpeg"
+
+        async def settled(self, since=None, **kw):
+            calls.append(("settled", kw.get("most")))
+            return 0.3, True
+
+    class FakeOCR:
+        mode, last_s = "actor", 0.2
+        reads: list = []
+
+        async def read(self, jpeg):
+            calls.append("ocr")
+            return self.reads.pop(0) if self.reads else []
+
+    def run(text, reads, mode="actor"):
+        calls.clear()
+        FakeOCR.mode, FakeOCR.reads = mode, list(reads)
+        agent = Agent(phone=Phone(), screen=Screen(), actor=None, planner=None, trace=Trace(None), ocr=FakeOCR())
+        agent._acted_at = 1.0
+        act = {"action": "spotlight", "text": text}
+        asyncio.run(agent._do(act))
+        return act
+
+    line = lambda text, y: {"text": text, "x": 0.5, "y": y, "w": 0.3, "h": 0.03, "conf": 0.9}  # noqa: E731
+    typed = ["home", ("settled", 1.5), "swipe", ("settled", 1.5), ("key", "cmd+a"), ("key", "backspace"),
+             ("type", "시계")]
+
+    act = run("시계", [[line("tlrP", 0.08), line("Siri 제안", 0.3)]])
+    assert calls == [*typed, ("settled", 1.5), "ocr", ("key", "cmd+a"), ("key", "backspace"), ("key", "ctrl+space"),
+                     ("type", "시계")]
+    assert act["retyped"] is True and "retyped" in META and _key(act) == {"action": "spotlight", "text": "시계"}
+
+    assert "retyped" not in run("시계", [[line("시계", 0.08)]])  # Korean came out right
+    assert calls[-2:] == [("settled", 1.5), "ocr"]
+    assert "retyped" not in run("시계", [[line("tlrP", SPOTLIGHT_FIELD + 0.1)]])  # the letters are below the field
+    assert "retyped" not in run("시계", [[]])  # nothing read: unsure, leave it to the actor
+    assert "retyped" not in run("시계", [[line("abc", 0.08)]])  # other letters: not this mistake
+    assert "retyped" not in run("Settings", [[line("Settings", 0.08)]]) and calls == [*typed[:-1], ("type", "Settings")]
+    assert "retyped" not in run("시계", [[line("tlrP", 0.08)]], mode="api") and calls == typed  # OCR not for the actor
+    assert run("교보eBook", [[line("ryqhebook", 0.08)]])["retyped"] is True  # "ryqh" is in it: typed again
+    assert calls[-1] == ("type", "교보eBook")
