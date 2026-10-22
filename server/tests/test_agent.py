@@ -1080,3 +1080,17 @@ def test_prompts_ask_to_note_a_confirmed_step_and_not_redo_it():
     text = " ".join(ACTOR_PROMPT.split()).lower()
     assert "record it with a note in the same reply as the action that follows" in text
     assert "a step they say is done is done" in text and "instead of repeating that one" in text
+
+
+def test_prompts_name_the_resting_pointer_so_nobody_treats_it_as_a_touch():
+    """#74 M4-2: on device (0.5.8) the parked pointer (PARK, far left, halfway down) sat on a settings row; the checker
+    called it a pressed switch and the actor spent 6 steps trying to make the marker go away."""
+    from hidagent.agent import ACTOR_PROMPT, CHECK_PROMPT
+    from hidagent.phone import PARK
+
+    assert PARK == (0.015, 0.5)  # the wording below describes this spot
+    for prompt in (ACTOR_PROMPT, CHECK_PROMPT):
+        text = " ".join(prompt.split()).lower()
+        assert "far left edge, halfway down the screen" in text and "resting after a gesture" in text
+    assert "never tap, wait or swipe to make it go away" in ACTOR_PROMPT
+    assert "never count it as something pressed, open or wrong" in CHECK_PROMPT
