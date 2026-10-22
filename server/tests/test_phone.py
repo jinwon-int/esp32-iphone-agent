@@ -495,3 +495,20 @@ def test_a_single_jolt_at_the_edge_is_not_a_page_turn(tmp_path, monkeypatch):
     phone, _ = carry_phone(tmp_path, monkeypatch, [_jpeg(30, start)] * 3 + [_jpeg(30)] * 37 + jolts)
     with pytest.raises(RuntimeError, match="page did not turn"):
         asyncio.run(phone.carry(start, (0.5, 0.6), pages=1))
+
+
+def test_absolute_glide_step_sets_how_many_reports_a_stroke_takes(tmp_path):
+    """Every absolute report is one board round trip (~170 ms on the device), so a page turn passes a bigger step."""
+    from hidagent.phone import Phone
+
+    def stroke(sent):  # the reports while the button is down
+        return sent[sent.index("press") + 1:sent.index("release")]
+
+    phone = Phone(FakeDevice(), tmp_path / "calibration.json", pointer="absolute")
+    asyncio.run(phone.drag([(0.1, 0.5), (0.7, 0.5)], hold=False))
+    default = stroke(phone.device.sent)
+    phone.device.sent.clear()
+    asyncio.run(phone.drag([(0.1, 0.5), (0.7, 0.5)], hold=False, step=0.15))
+    wide = stroke(phone.device.sent)
+    assert len(default) == 20 and len(wide) == 4  # 0.6 / 0.03 vs 0.6 / 0.15
+    assert all(c.startswith("at ") for c in default + wide)
