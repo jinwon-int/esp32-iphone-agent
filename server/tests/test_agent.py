@@ -1097,12 +1097,12 @@ def test_prompts_name_the_resting_pointer_so_nobody_treats_it_as_a_touch():
 
 
 def test_spotlight_types_again_when_korean_came_out_in_latin_letters():
-    """#74 M5-2: with OCR in actor mode the spotlight macro reads the search field after typing; "tlrP" where 시계
-    was typed means the input language was English -> clear, switch, type again, `retyped` on the step. No OCR,
-    Hangul in the band, an empty band or other letters: nothing more happens."""
+    """#74 M5-2: with OCR in actor mode the spotlight macro reads the screen after typing; "tlrP" somewhere and 시계
+    nowhere means the input language was English -> clear, switch, type again, `retyped` on the step. No OCR, the
+    Korean on screen, nothing read, other letters or keys too short to look for: nothing more happens."""
     import asyncio
 
-    from hidagent.agent import META, SPOTLIGHT_FIELD, Agent, _key
+    from hidagent.agent import META, RETYPE_PROBE, Agent, _key
     from hidagent.debug import Trace
 
     calls = []
@@ -1148,15 +1148,17 @@ def test_spotlight_types_again_when_korean_came_out_in_latin_letters():
     typed = ["home", ("settled", 1.5), "swipe", ("settled", 1.5), ("key", "cmd+a"), ("key", "backspace"),
              ("type", "시계")]
 
-    act = run("시계", [[line("tlrP", 0.08), line("Siri 제안", 0.3)]])
+    act = run("시계", [[line("Siri 제안", 0.3), line("tlrP", 0.92)]])  # iOS puts the field at the bottom
     assert calls == [*typed, ("settled", 1.5), "ocr", ("key", "cmd+a"), ("key", "backspace"), ("key", "ctrl+space"),
                      ("type", "시계")]
     assert act["retyped"] is True and "retyped" in META and _key(act) == {"action": "spotlight", "text": "시계"}
 
-    assert "retyped" not in run("시계", [[line("시계", 0.08)]])  # Korean came out right
+    assert "retyped" not in run("시계", [[line("시계", 0.92)]])  # Korean came out right
     assert calls[-2:] == [("settled", 1.5), "ocr"]
-    assert "retyped" not in run("시계", [[line("tlrP", SPOTLIGHT_FIELD + 0.1)]])  # the letters are below the field
+    assert "retyped" not in run("시계", [[line("시계", 0.3), line("tlrP", 0.92)]])  # the Korean is on screen: unsure
     assert "retyped" not in run("시계", [[]])  # nothing read: unsure, leave it to the actor
+    assert "retyped" not in run("아", [[line("dk", 0.92)]]) and RETYPE_PROBE == 3 and calls[-1] == ("type", "아")
+    assert run("앱들", [[line("doqemf", 0.92)]])["retyped"] is True  # 6 keys: long enough to look for
     assert "retyped" not in run("시계", [[line("abc", 0.08)]])  # other letters: not this mistake
     assert "retyped" not in run("Settings", [[line("Settings", 0.08)]]) and calls == [*typed[:-1], ("type", "Settings")]
     assert "retyped" not in run("시계", [[line("tlrP", 0.08)]], mode="api") and calls == typed  # OCR not for the actor
