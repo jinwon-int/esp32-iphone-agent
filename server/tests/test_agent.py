@@ -1067,3 +1067,16 @@ def test_drag_guard_observes_by_default_and_stops_only_in_apply(monkeypatch, tmp
         asyncio.run(phone.drag([(0.2, 0.2), (0.6, 0.6)], pick=0.0, guard=tripped))
     assert phone.device.sent[-1] == "release"  # released in place, nothing carried
     assert not any(c.startswith("at 19660") for c in phone.device.sent)  # never reached the target (0.6 * 32767)
+
+
+def test_prompts_ask_to_note_a_confirmed_step_and_not_redo_it():
+    """#74 M4-1: the bold-text loop (0.5.7 A/B on device) — the actor turned the switch on, confirmed it, turned it
+    off, then read the off state as "my tap missed" and toggled on again until the step limit. The one run that
+    succeeded had noted the confirmation. So the planner marks steps to note, and the actor notes a confirmed
+    step in the same reply and trusts that note over the changed screen."""
+    from hidagent.agent import ACTOR_PROMPT, PLANNER_PROMPT
+
+    assert '"note it once confirmed"' in PLANNER_PROMPT
+    text = " ".join(ACTOR_PROMPT.split()).lower()
+    assert "record it with a note in the same reply as the action that follows" in text
+    assert "a step they say is done is done" in text and "instead of repeating that one" in text
