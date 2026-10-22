@@ -55,6 +55,8 @@ the phone.
 Positions are integer pixels on the screenshot exactly as you see it (x from the left edge, y from the top
 edge); the request gives its size. Read them off the image; never rescale them to another unit.
 Aim at the visual center of the element you want, not its edge or its label.
+A small round marker at the far left edge, halfway down the screen, is your own pointer resting after a gesture:
+it is not a touch and presses nothing; ignore it, and never tap, wait or swipe to make it go away.
 Look before you act: describe what is really on the screen now, not what you expect.
 Each recent action says whether the screen changed after it. If it did NOT change, the action
 missed or had no effect: do not assume it worked; aim again more precisely or try another way.
@@ -144,7 +146,9 @@ Judge only from this screenshot, never from the agent's claim. First line: YES o
 Say NO when the screenshot does not visibly show the goal reached, or when something is left open that the goal
 did not ask for: Home Screen edit mode (a checkmark button at the top right, a brush button at the top left,
 minus badges on icons; the icons may wiggle), an open folder, an item's menu, a dialog or alert, or a text field
-still being edited. Name what is wrong so the agent can fix it."""
+still being edited. Name what is wrong so the agent can fix it.
+A small round marker at the far left edge, halfway down the screen, is the agent's pointer resting after a gesture:
+it is not a touch and presses nothing on that row; never count it as something pressed, open or wrong."""
 
 MAX_REJECTED = 2  # done is sent back at most this often per run; the next done is taken, marked unverified
 
