@@ -43,6 +43,11 @@ the default.
 | `ADAPTER_DEFAULT_MODEL` | `sonnet` | fallback model |
 | `ADAPTER_CONCURRENCY` | `2` | parallel CLI runs |
 | `ADAPTER_EFFORT` | (unset) | default effort, see above |
+| `ADAPTER_SHOT_DIR` | (unset) | keep every screen image here (folder 0700, images 0600, `shot-<time>-<id>-<n>.jpg`); unset = not kept |
+| `ADAPTER_SHOT_DAYS` | `7` | kept images older than this are deleted (swept at most once an hour, only `shot-*` files) |
+
+Only the images are written — no prompt text, no replies. Keep the folder on the node itself; it holds what was on
+the phone's screen (owner decision 2026-10-23: kept on the node for a week so a run can be looked at afterwards).
 
 `GET /v1/health` → `{"ok": true}` without a token.
 

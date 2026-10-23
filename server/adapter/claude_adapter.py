@@ -6,6 +6,10 @@ Why: esp32-iphone-agent talks to any OpenAI-compatible vision endpoint; this nod
 CLI in print mode, with tools disabled, user hooks/settings skipped (--setting-sources project, empty cwd),
 no session persistence, and the callers system prompt replacing Claude Codes.
 Logs carry timing and counts only, never prompt text or images.
+
+Screen images are kept on this node only when ADAPTER_SHOT_DIR is set (owner decision 2026-10-23: kept here, where
+nobody else can read them, so a run can be looked at afterwards, and deleted after ADAPTER_SHOT_DAYS, 7 by default).
+The folder is 0700 and every image 0600; nothing else of the request (prompt text, replies) is written.
 """
 import base64
 import json
@@ -27,6 +31,12 @@ CLAUDE = os.environ.get("CLAUDE_BIN", "claude")
 TIMEOUT = float(os.environ.get("ADAPTER_TIMEOUT", "110"))
 DEFAULT_MODEL = os.environ.get("ADAPTER_DEFAULT_MODEL", "sonnet")
 SLOTS = threading.BoundedSemaphore(int(os.environ.get("ADAPTER_CONCURRENCY", "2")))
+SHOT_DIR = os.environ.get("ADAPTER_SHOT_DIR", "").strip()  # "" = screen images are not kept (the default)
+SHOT_DAYS = float(os.environ.get("ADAPTER_SHOT_DAYS", "7"))
+SHOT_PRUNE_EVERY = 3600.0  # seconds between sweeps for images older than SHOT_DAYS
+SHOT_SUFFIX = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+_shots = threading.Lock()
+_last_prune = [0.0]
 
 
 def log(msg):
@@ -71,6 +81,48 @@ def blocks_of(content):
                 base64.b64decode(data[:64] + "==", validate=False)  # cheap sanity check
                 out.append({"type": "image", "source": {"type": "base64", "media_type": media, "data": data}})
     return out
+
+
+def prune_images(folder, now, days):
+    """Delete kept images older than `days`; only files this adapter writes (shot-*), nothing else."""
+    cutoff, gone = now - days * 86400, 0
+    for f in Path(folder).glob("shot-*"):
+        try:
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                gone += 1
+        except OSError:
+            pass
+    return gone
+
+
+def keep_images(blocks, folder=None, days=None, now=None):
+    """Write each image block to `folder` (SHOT_DIR) as shot-<local time>-<id>-<n>.<ext>, 0600, and sweep out
+    images older than `days` at most once an hour. Returns the paths written; [] when keeping is off."""
+    folder = SHOT_DIR if folder is None else folder
+    if not folder:
+        return []
+    days = SHOT_DAYS if days is None else days
+    now = time.time() if now is None else now
+    d = Path(folder)
+    with _shots:
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(d, 0o700)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
+        rid, written = uuid.uuid4().hex[:6], []
+        for n, b in enumerate(b for b in blocks if b["type"] == "image"):
+            src = b["source"]
+            path = d / f"shot-{stamp}-{rid}-{n}{SHOT_SUFFIX.get(src['media_type'], '.img')}"
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as out:
+                out.write(base64.b64decode(src["data"]))
+            written.append(path)
+        if now - _last_prune[0] >= SHOT_PRUNE_EVERY:
+            _last_prune[0] = now
+            gone = prune_images(d, now, days)
+            if gone:
+                log(f"pruned {gone} screen images older than {days:g} days")
+    return written
 
 
 def ask(system, blocks, model, effort=""):
@@ -135,6 +187,11 @@ class Handler(BaseHTTPRequestHandler):
         effort = pick_effort(suffix, body.get("reasoning_effort"), DEFAULT_EFFORT)
         tag = f"model={model} effort={effort or 'default'}"
         images = sum(b["type"] == "image" for b in blocks)
+        try:
+            kept = len(keep_images(blocks))
+        except Exception as e:  # noqa: BLE001 - keeping is a by-product: never fail the request for it
+            kept = 0
+            log(f"error keeping images: {type(e).__name__}")
         started = time.time()
         try:
             text, usage = ask("\n\n".join(system), blocks, model, effort)
@@ -145,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
             log(f"error {tag} images={images}: {e}")
             return self.reply(502, {"error": {"message": str(e)[:200]}})
         ms = int((time.time() - started) * 1000)
-        log(f"ok {tag} images={images} ms={ms} out_chars={len(text)}")
+        log(f"ok {tag} images={images} kept={kept} ms={ms} out_chars={len(text)}")
         self.reply(200, {"id": "chatcmpl-" + uuid.uuid4().hex[:12], "object": "chat.completion",
                          "created": int(time.time()), "model": model,
                          "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
@@ -155,5 +212,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    log(f"listening on {HOST}:{PORT}, default model {DEFAULT_MODEL}")
+    log(f"listening on {HOST}:{PORT}, default model {DEFAULT_MODEL}, "
+        + (f"screen images kept {SHOT_DAYS:g} days" if SHOT_DIR else "screen images not kept"))
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
