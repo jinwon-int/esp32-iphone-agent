@@ -19,6 +19,7 @@ def adapter(tmp_path, monkeypatch):
     monkeypatch.setenv("ADAPTER_TOKEN_FILE", str(token))
     monkeypatch.delenv("ADAPTER_EFFORT", raising=False)
     monkeypatch.delenv("ADAPTER_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("ADAPTER_SHOT_DIR", raising=False)
     spec = importlib.util.spec_from_file_location("claude_adapter_under_test", ADAPTER)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
@@ -103,3 +104,61 @@ def test_ask_reports_a_failed_or_missing_result(adapter, monkeypatch):
     monkeypatch.setattr(adapter.subprocess, "run", lambda *a, **k: Silent())
     with pytest.raises(RuntimeError, match="claude failed: rc=3"):
         adapter.ask("S", [], "sonnet")
+
+
+# Screen images kept on the node (owner decision 2026-10-23): off unless ADAPTER_SHOT_DIR is set, 0700/0600, a week.
+
+JPEG = b"\xff\xd8\xff\xe0screen"
+
+
+def image_blocks(adapter, n=2):
+    import base64
+    url = "data:image/jpeg;base64," + base64.b64encode(JPEG).decode()
+    return adapter.blocks_of([{"type": "text", "text": "what is on the screen"}]
+                             + [{"type": "image_url", "image_url": {"url": url}}] * n)
+
+
+def test_screen_images_are_not_kept_by_default(adapter, tmp_path):
+    assert adapter.SHOT_DIR == ""
+    assert adapter.keep_images(image_blocks(adapter)) == []
+    assert list(tmp_path.glob("**/shot-*")) == []
+
+
+def test_screen_images_are_kept_private_byte_for_byte(adapter, tmp_path):
+    import stat
+    folder = tmp_path / "shots"
+    paths = adapter.keep_images(image_blocks(adapter), folder=str(folder), now=1792760000.0)
+    assert len(paths) == 2 and all(p.suffix == ".jpg" and p.name.startswith("shot-") for p in paths)
+    assert [p.read_bytes() for p in paths] == [JPEG, JPEG]
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+    assert {stat.S_IMODE(p.stat().st_mode) for p in paths} == {0o600}
+    assert not list(folder.glob("*.txt"))  # images only: no prompt text, no replies
+
+
+def test_images_older_than_the_limit_are_deleted_and_nothing_else(adapter, tmp_path):
+    import os
+    folder = tmp_path / "shots"
+    folder.mkdir()
+    now = 1792760000.0
+    old, fresh, other = folder / "shot-old.jpg", folder / "shot-fresh.jpg", folder / "notes.txt"
+    for f in (old, fresh, other):
+        f.write_bytes(b"x")
+    os.utime(old, (now - 8 * 86400, now - 8 * 86400))
+    os.utime(fresh, (now - 6 * 86400, now - 6 * 86400))
+    os.utime(other, (now - 30 * 86400, now - 30 * 86400))
+    adapter.keep_images(image_blocks(adapter, 1), folder=str(folder), days=7, now=now)
+    assert not old.exists() and fresh.exists() and other.exists()
+
+
+def test_the_sweep_runs_at_most_once_an_hour(adapter, tmp_path):
+    import os
+    folder = tmp_path / "shots"
+    now = 1792760000.0
+    adapter.keep_images(image_blocks(adapter, 1), folder=str(folder), days=7, now=now)  # first call sweeps
+    late = folder / "shot-late.jpg"
+    late.write_bytes(b"x")
+    os.utime(late, (now - 9 * 86400, now - 9 * 86400))
+    adapter.keep_images(image_blocks(adapter, 1), folder=str(folder), days=7, now=now + 600)
+    assert late.exists()  # 10 minutes later: no sweep yet
+    adapter.keep_images(image_blocks(adapter, 1), folder=str(folder), days=7, now=now + 3600)
+    assert not late.exists()

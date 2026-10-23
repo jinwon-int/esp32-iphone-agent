@@ -12,6 +12,9 @@ Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=ADAPTER_TOKEN_FILE=/home/<user>/.local/share/hidagent-claude/token
 Environment=ADAPTER_HOST=100.x.y.z
 Environment=CLAUDE_BIN=/usr/bin/claude
+# Optional: keep the screen images on this node for a week (folder 0700, images 0600; owner decision 2026-10-23)
+#Environment=ADAPTER_SHOT_DIR=/home/<user>/.local/share/hidagent-claude/shots
+#Environment=ADAPTER_SHOT_DAYS=7
 ExecStart=/usr/bin/python3 /home/<user>/.local/share/hidagent-claude/adapter.py
 Restart=on-failure
 RestartSec=5
