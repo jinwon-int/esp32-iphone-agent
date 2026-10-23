@@ -131,6 +131,8 @@ class Device:
             return 5 + 0.1 * len(arg)
         if name == "ping":
             return 8  # an idle check: tolerate a Wi-Fi hiccup rather than drop a healthy board
+        if name == "usbreset":
+            return 8  # off the bus up to 1 s, then up to 3 s for the phone to mount the board again (#60)
         return 5
 
     async def send(self, command: str) -> str:

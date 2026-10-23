@@ -57,6 +57,7 @@ PAGE_SLIDE_PICK = 0.35    # ... the button rests down before the finger moves: w
 PAGE_SLIDE_STEPS = 8      # ... reports along the way
 PAGE_SLIDE_STEP_S = 0.03  # ... between them
 PAGE_SLIDE_REST = 0.15    # ... the finger rests at the end before the release
+PAGE_SLIDE_USB_RESET = 5.0  # ... then the board drops off USB and comes back, and the phone gets this long (#60)
 LIFT_DIST = 0.03        # screen fraction of a drag's first stretch that ``lift`` slows down, so iOS lifts the item
 LIFT_STEPS = 6          # reports (absolute) or moves (relative) over that stretch
 EDGE_X = (0.015, 0.985) # where carry() holds an item so iOS turns the page (left, right)
@@ -377,6 +378,12 @@ class Phone:
         after the release left the page standing again (run 6311bfbe0388 parked at once: stuck 4/5 turned;
         bd118718a80a parked 0.8 s later: stuck half turned). Not parking is needed, not enough: the same recipe
         without a park also stood half turned later that day (b333e9f0a2c5, 6bab9e2d7aeb).
+
+        Then the board drops off USB and comes back ("usbreset", firmware #98) and the phone gets
+        PAGE_SLIDE_USB_RESET (#60, device 2026-10-23): a turn left standing three quarters turned was finished in
+        the direction it was going every time (runs 713bc89a2f38, 78d1f0a39e00), and turn + usbreset + 5 s landed
+        on the page asked for (71c1491d70a6, 1766017bf89d); a turn that went through is not changed by it. A board
+        without the command ("err unknown command") leaves the turn as it is.
         """
         if not self.absolute:
             await self.drag([(x1, y1), (x2, y2)], pick=PAGE_SLIDE_PICK, rest=PAGE_SLIDE_REST)
@@ -393,6 +400,18 @@ class Phone:
             await asyncio.sleep(PAGE_SLIDE_REST)
         finally:
             await self.device.send("release")
+        await self._usb_reset()
+
+    async def _usb_reset(self) -> None:
+        """Drop the board off USB and back (#60): it ends a page turn iOS left standing. Older firmware skips it."""
+        try:
+            await self.device.send("usbreset")
+        except DeviceError as e:
+            if "unknown command" not in str(e):
+                raise
+            log.warning("board has no usbreset (flash firmware #98 or later): the page turn is left as it is")
+            return
+        await asyncio.sleep(PAGE_SLIDE_USB_RESET)
 
     async def drag(self, points: list[tuple[float, float]], hold: bool = True, pick: float = 0.0,
                    rest: float | None = None, aim: bool = False, stops: list[float] | None = None,

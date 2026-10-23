@@ -388,6 +388,10 @@ bool usbReady() {
 // leaves the bus (tud_disconnect) for `off` ms, comes back (tud_connect) and waits for the phone to set it up
 // again. The button and keys are let go first, so nothing is held when it returns. Bounded well inside the app's
 // 5 s reply limit and the watchdog: off <= USB_RESET_OFF_MAX_MS plus at most USB_RESET_MOUNT_MS for the mount.
+volatile uint32_t usbMounts = 0;  // counted by onUsbMounted (tud_mount_cb -> ARDUINO_USB_STARTED_EVENT)
+
+void onUsbMounted(void *, esp_event_base_t, int32_t, void *) { usbMounts++; }
+
 const long USB_RESET_OFF_MS = 500;
 const long USB_RESET_OFF_MAX_MS = 1000;
 const long USB_RESET_MOUNT_MS = 3000;
@@ -400,15 +404,19 @@ String usbReset(const String &arg) {
     keyboard.releaseAll();
     consumer.release();
   }
+  // tud_mounted() stays true across tud_disconnect until the host resets the bus again, so it cannot tell the
+  // new mount from the old one ("ok mounted 0", device 2026-10-23): wait for the mount event instead.
+  uint32_t before = usbMounts;
   if (!tud_disconnect()) return "err usbreset not supported";
   delay(off);
   esp_task_wdt_reset();
   if (!tud_connect()) return "err usbreset could not reconnect";
   unsigned long started = millis();
-  while (!tud_mounted() && millis() - started < (unsigned long)USB_RESET_MOUNT_MS) delay(10);
+  while (usbMounts == before && millis() - started < (unsigned long)USB_RESET_MOUNT_MS) delay(10);
   esp_task_wdt_reset();
   unsigned long took = millis() - started;
-  return tud_mounted() ? "ok mounted " + String(took) : "err usbreset not mounted again within " + String(USB_RESET_MOUNT_MS) + " ms";
+  return usbMounts != before ? "ok mounted " + String(took)
+                             : "err usbreset not mounted again within " + String(USB_RESET_MOUNT_MS) + " ms";
 }
 
 String run(const String &line) {
@@ -651,6 +659,7 @@ void setup() {
   mouse.begin();
   consumer.begin();
   USB.productName("HID Bridge");
+  USB.onEvent(ARDUINO_USB_STARTED_EVENT, onUsbMounted);
   USB.begin();
 #if BLE_LINK
   bleBegin();
