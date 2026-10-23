@@ -367,6 +367,11 @@ class Phone:
         because every command is one link round trip (about 170 ms over Bluetooth LE, #74): sent report by report
         the finger crawled and iOS snapped the page back. A board without "stroke" (older firmware: "err unknown
         command", remembered until the next link) or a relative pointer gets the stroke as a drag in ``step`` steps.
+
+        After the stroke the button is released once more, as its own command, before the pointer parks (device
+        2026-10-23, run bc067891b282: the page stood half turned after the stroke, as with a finger still down — the
+        release right after the 8 ms reports did not reach iOS; #60). A second release is a no-op when the first
+        arrived, and the pointer does not move until it is sent.
         """
         if self.absolute and self._no_stroke != self.device.links:
             await self.point(x1, y1)  # wakes a hidden pointer first (ABS_WAKE_AFTER)
@@ -380,6 +385,7 @@ class Phone:
                 log.info("board has no stroke command (older firmware): page turns are dragged")
             else:
                 self._reported = time.monotonic()
+                await self.device.send("release")
                 await self._park()
                 return
         await self.swipe(x1, y1, x2, y2, hold=False, step=step)
