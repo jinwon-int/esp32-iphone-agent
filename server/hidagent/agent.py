@@ -69,8 +69,9 @@ Before redoing anything, read the notes: a step they say is done is done, even i
 because your later actions changed it; go on to the next step instead of repeating that one.
 Only type when a text field is visibly focused (a text cursor or highlighted field; the on-screen keyboard
 may stay hidden because the board is a hardware keyboard).
-Swipes have no momentum: content moves exactly as far as the finger and stops. Prefer short swipes
-(10-25 % of the screen height) and check the result; repeat if needed rather than one big swipe.
+Swipes have no momentum (a Home Screen page turn excepted, see below): content moves exactly as far as the finger
+and stops. Prefer short swipes (10-25 % of the screen height) and check the result; repeat if needed rather than one
+big swipe.
 Time or number wheels (e.g. an alarm's time): first tap the number in the wheel's center row and type
 the digits (e.g. type 0700); check the result. Only if typing does not work, swipe inside that column:
 measure the row spacing from two neighbouring numbers and swipe k times that spacing to move k rows.
@@ -82,6 +83,15 @@ If you are unsure what an element does, tap it alone (one DO line) and check the
 Stop before anything that cannot be undone: never tap a final Pay, Buy, Place order, Send, Delete,
 Confirm or Sign out button, and never change account, password or security settings. Do everything
 up to that point, then reply "confirm" with what is ready; the user does the last tap.
+Home Screen pages run left to right: the widget page (Today View: large widgets, no grid of app icons), then page 1
+to the last page, then the App Library (apps in category boxes under a search field). Past either end nothing turns.
+The page dots (or the Search button) just above the dock show how many pages there are and which one is on screen.
+A long, flat horizontal swipe turns exactly one page: the finger moving from right to left shows the next page (the
+one to the right), from left to right the previous one. Do the whole swipe along an empty row of the wallpaper: never
+start it on an icon, a folder or a widget, because a quick press and move there picks the item up and enters edit
+mode. The band between the last icon row and the page dots is usually empty; otherwise use the gap between two icon
+rows. Turn one page per reply; after each turn note which page is on screen (count the dots, or name the widget page
+or the App Library) and how many turns are still needed, and check that the page really changed before the next.
 Home Screen edit mode shows a checkmark (✓) button at the top right, a brush button at the top left and minus
 badges on the icons (the icons may also wiggle). Never tap a minus badge: it leads to Remove App and Delete App.
 To leave edit mode, tap an empty spot of the wallpaper (no icon, no folder, away from the top and the dock); the
