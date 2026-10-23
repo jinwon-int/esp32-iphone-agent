@@ -529,8 +529,8 @@ class SleepLog(FakeDevice):
 def test_a_flick_rests_after_the_press_and_before_the_release(tmp_path, monkeypatch):
     """#74, device 2026-10-23: turns that moved right after the press stood two thirds turned; the glassbox recipe
     turned the page both ways (runs 9d10720c0f04, 91268ce870d6): start reported twice, 0.25 s, press, 0.35 s,
-    8 reports 0.03 s apart, 0.15 s, release — and nothing after: a park right after the release left the page
-    standing (runs 6311bfbe0388, bd118718a80a)."""
+    8 reports 0.03 s apart, 0.15 s, release — no park (a park right after the release left the page standing,
+    runs 6311bfbe0388, bd118718a80a) — then usbreset and 5 s (#60: it finishes a turn iOS left standing)."""
     from hidagent.phone import Phone
     phone = Phone(SleepLog(monkeypatch), tmp_path / "calibration.json", pointer="absolute")
     asyncio.run(phone.flick(0.92, 0.8, 0.08, 0.8))
@@ -541,8 +541,41 @@ def test_a_flick_rests_after_the_press_and_before_the_release(tmp_path, monkeypa
     assert sent[i + 1] == "sleep 0.35" and sent[sent.index("release") - 1] == "sleep 0.15"
     assert moves[0::2] == [f"at {round((0.92 - 0.105 * k) * 32767)} 26214" for k in range(1, 9)]
     assert set(moves[1::2]) == {"sleep 0.03"}
-    assert sent[-1] == "release"  # no park
+    assert sent[sent.index("release"):] == ["release", "usbreset", "sleep 5"]  # no park; the board re-plugs
     assert not any(c.startswith("stroke") for c in sent)
+
+
+def test_a_flick_on_a_board_without_usbreset_leaves_the_turn_as_it_is(tmp_path, monkeypatch):
+    """Firmware before #98 answers "err unknown command": the turn is done, only the re-plug is skipped."""
+    from hidagent.device import DeviceError
+    from hidagent.phone import Phone
+
+    class Old(SleepLog):
+        async def send(self, command):
+            self.sent.append(command)
+            if command == "usbreset":
+                raise DeviceError("err unknown command")
+            return "ok"
+
+    phone = Phone(Old(monkeypatch), tmp_path / "calibration.json", pointer="absolute")
+    asyncio.run(phone.flick(0.92, 0.8, 0.08, 0.8))
+    assert phone.device.sent[-2:] == ["release", "usbreset"]  # and no 5 s wait after it
+
+
+def test_a_flick_still_fails_when_usbreset_fails_otherwise(tmp_path, monkeypatch):
+    from hidagent.device import DeviceError
+    from hidagent.phone import Phone
+
+    class Unmounted(SleepLog):
+        async def send(self, command):
+            self.sent.append(command)
+            if command == "usbreset":
+                raise DeviceError("err usbreset not mounted again within 3000 ms")
+            return "ok"
+
+    phone = Phone(Unmounted(monkeypatch), tmp_path / "calibration.json", pointer="absolute")
+    with pytest.raises(DeviceError):
+        asyncio.run(phone.flick(0.92, 0.8, 0.08, 0.8))
 
 
 def test_a_flick_is_released_even_when_a_move_fails(tmp_path, monkeypatch):

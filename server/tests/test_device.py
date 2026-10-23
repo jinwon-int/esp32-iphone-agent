@@ -8,6 +8,7 @@ from hidagent.device import MAX_PENDING_PER_PEER, Device, DeviceError
 
 def test_timeout_grows_with_move_distance_and_text_length():
     assert Device._timeout("click") == 5
+    assert Device._timeout("usbreset") == Device._timeout("usbreset 800") == 8  # up to 4 s on the board (#60)
     assert Device._timeout("move 1000 -20") > Device._timeout("move 10 10") >= 5
     assert Device._timeout("type " + "x" * 40) > Device._timeout("type hi")
 
