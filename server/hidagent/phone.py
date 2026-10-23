@@ -372,6 +372,11 @@ class Phone:
         turned it both ways (runs 9d10720c0f04, 91268ce870d6): the pointer reported on the start twice and resting
         PAGE_SLIDE_SETTLE, press, PAGE_SLIDE_PICK still, PAGE_SLIDE_STEPS reports PAGE_SLIDE_STEP_S apart, then
         PAGE_SLIDE_REST still before the release. A relative pointer drags with the same rests.
+
+        The pointer stays where the finger lifted — no park (iphone-agent-cast#59, handoff §2-2): moving it right
+        after the release left the page standing again (run 6311bfbe0388 parked at once: stuck 4/5 turned;
+        bd118718a80a parked 0.8 s later: stuck half turned). Not parking is needed, not enough: the same recipe
+        without a park also stood half turned later that day (b333e9f0a2c5, 6bab9e2d7aeb).
         """
         if not self.absolute:
             await self.drag([(x1, y1), (x2, y2)], pick=PAGE_SLIDE_PICK, rest=PAGE_SLIDE_REST)
@@ -388,7 +393,6 @@ class Phone:
             await asyncio.sleep(PAGE_SLIDE_REST)
         finally:
             await self.device.send("release")
-        await self._park()
 
     async def drag(self, points: list[tuple[float, float]], hold: bool = True, pick: float = 0.0,
                    rest: float | None = None, aim: bool = False, stops: list[float] | None = None,
