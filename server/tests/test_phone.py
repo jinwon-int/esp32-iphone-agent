@@ -529,7 +529,8 @@ class SleepLog(FakeDevice):
 def test_a_flick_rests_after_the_press_and_before_the_release(tmp_path, monkeypatch):
     """#74, device 2026-10-23: turns that moved right after the press stood two thirds turned; the glassbox recipe
     turned the page both ways (runs 9d10720c0f04, 91268ce870d6): start reported twice, 0.25 s, press, 0.35 s,
-    8 reports 0.03 s apart, 0.15 s, release, then the pointer parks."""
+    8 reports 0.03 s apart, 0.15 s, release — and nothing after: a park right after the release left the page
+    standing (runs 6311bfbe0388, bd118718a80a)."""
     from hidagent.phone import Phone
     phone = Phone(SleepLog(monkeypatch), tmp_path / "calibration.json", pointer="absolute")
     asyncio.run(phone.flick(0.92, 0.8, 0.08, 0.8))
@@ -540,7 +541,7 @@ def test_a_flick_rests_after_the_press_and_before_the_release(tmp_path, monkeypa
     assert sent[i + 1] == "sleep 0.35" and sent[sent.index("release") - 1] == "sleep 0.15"
     assert moves[0::2] == [f"at {round((0.92 - 0.105 * k) * 32767)} 26214" for k in range(1, 9)]
     assert set(moves[1::2]) == {"sleep 0.03"}
-    assert sent[sent.index("release") + 1:] == [PARK_AT]
+    assert sent[-1] == "release"  # no park
     assert not any(c.startswith("stroke") for c in sent)
 
 
