@@ -4,6 +4,8 @@
 // Protocol (one command per line, the board answers "ok" or "err <why>"):
 //   ping | home | move <dx> <dy> | press | release | click
 //   hidstat  (answers "ok resent=<n> failed=<n>": button reports sent again / given up, see confirmButtons, #60)
+//   usbreset [off ms]  (drops off USB and comes back, like unplugging the board; answers "ok mounted <ms>", see
+//                usbReset, #60)
 //   scroll <v> <h> | type <ascii text> | key <combo, e.g. cmd+h, enter>
 //   at <x> <y>   (ABSOLUTE_POINTER builds only: put the pointer at x, y in 0..32767 across the screen)
 //   stroke <x1> <y1> <x2> <y2> <n>   (ABSOLUTE_POINTER builds only: press at x1, y1, n reports STEP_MS apart to
@@ -380,6 +382,35 @@ bool usbReady() {
   return tud_mounted() && !tud_suspended();
 }
 
+// #60, device 2026-10-23: after a Home Screen page turn the page sometimes stands three quarters turned and iOS
+// ignores the pointer (a click does nothing, a move barely nudges it) while the board saw every report go out
+// (hidstat resent=0 failed=0). Only unplugging the board freed it. usbreset does that without a hand: the device
+// leaves the bus (tud_disconnect) for `off` ms, comes back (tud_connect) and waits for the phone to set it up
+// again. The button and keys are let go first, so nothing is held when it returns. Bounded well inside the app's
+// 5 s reply limit and the watchdog: off <= USB_RESET_OFF_MAX_MS plus at most USB_RESET_MOUNT_MS for the mount.
+const long USB_RESET_OFF_MS = 500;
+const long USB_RESET_OFF_MAX_MS = 1000;
+const long USB_RESET_MOUNT_MS = 3000;
+
+String usbReset(const String &arg) {
+  long off = arg.length() ? arg.toInt() : USB_RESET_OFF_MS;
+  if (off < 100 || off > USB_RESET_OFF_MAX_MS) return "err usbreset needs off ms in 100.." + String(USB_RESET_OFF_MAX_MS);
+  if (tud_mounted() && !tud_suspended()) {
+    mouse.release(MOUSE_LEFT);
+    keyboard.releaseAll();
+    consumer.release();
+  }
+  if (!tud_disconnect()) return "err usbreset not supported";
+  delay(off);
+  esp_task_wdt_reset();
+  if (!tud_connect()) return "err usbreset could not reconnect";
+  unsigned long started = millis();
+  while (!tud_mounted() && millis() - started < (unsigned long)USB_RESET_MOUNT_MS) delay(10);
+  esp_task_wdt_reset();
+  unsigned long took = millis() - started;
+  return tud_mounted() ? "ok mounted " + String(took) : "err usbreset not mounted again within " + String(USB_RESET_MOUNT_MS) + " ms";
+}
+
 String run(const String &line) {
   int sp = line.indexOf(' ');
   String cmd = sp < 0 ? line : line.substring(0, sp);
@@ -388,6 +419,7 @@ String run(const String &line) {
   sscanf(arg.c_str(), "%ld %ld", &a, &b);
 
   if (cmd == "ping") return "ok";
+  if (cmd == "usbreset") return usbReset(arg);  // also when the phone has USB asleep: coming back may wake it
   if (!usbReady()) return "err phone usb asleep (unlock the phone)";
 #if ABSOLUTE_POINTER
   if (cmd == "home") { moveAbs(0, 0); return "ok"; }
