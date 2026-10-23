@@ -1305,3 +1305,15 @@ def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the
     asyncio.run(ag._do({"action": "swipe", "x1": 700, "y1": 500, "x2": 300, "y2": 500}))  # page turn
     asyncio.run(ag._do({"action": "swipe", "x1": 500, "y1": 800, "x2": 500, "y2": 300}))  # a list: rest, then lift
     assert calls == [("flick", (0.7, 0.5, 0.1, 0.5), 0.15), ("swipe", (0.5, 0.8, 0.5, 0.3), True, None)]
+
+
+def test_the_actor_knows_the_home_screen_pages_and_where_a_page_turn_starts():
+    """Device 2026-10-23 (run d1e1dd611c5b, #74): the board's stroke turned page 1 to the widget page, but a turn
+    started on an icon picked it up (edit mode), and the run mistook the widget page for page 1. The actor is told
+    the order of the pages, which way the finger turns them, to start on an empty row and to note the page."""
+    from hidagent.agent import ACTOR_PROMPT
+
+    for phrase in ("widget page (Today View", "App Library", "Past either end nothing turns", "page dots",
+                   "from right to left shows the next page", "never\nstart it on an icon",
+                   "note which page is on screen"):
+        assert phrase in ACTOR_PROMPT, phrase
