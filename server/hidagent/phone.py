@@ -52,7 +52,11 @@ ABS_TAP_SETTLE = 0.03   # seconds the absolute pointer rests on the target befor
 ABS_WAKE_AFTER = 2.0    # seconds without a pointer report after which iOS may have hidden the pointer
 ABS_WAKE_S = 0.3        # after such a pause: report the target once, wait this long, then act (#35: the first
                         # report only woke the pointer, so a tap clicked at the old spot and a swipe became a hold)
-STROKE_REPORTS = 12     # reports in a board-played stroke (flick), STEP_MS (8 ms) apart: about 0.1 s, a flick to iOS
+PAGE_SLIDE_SETTLE = 0.25  # a page turn (flick): the pointer rests on the start before the press (yoyicue/glassbox)
+PAGE_SLIDE_PICK = 0.35    # ... the button rests down before the finger moves: without it the page stood half turned
+PAGE_SLIDE_STEPS = 8      # ... reports along the way
+PAGE_SLIDE_STEP_S = 0.03  # ... between them
+PAGE_SLIDE_REST = 0.15    # ... the finger rests at the end before the release
 LIFT_DIST = 0.03        # screen fraction of a drag's first stretch that ``lift`` slows down, so iOS lifts the item
 LIFT_STEPS = 6          # reports (absolute) or moves (relative) over that stretch
 EDGE_X = (0.015, 0.985) # where carry() holds an item so iOS turns the page (left, right)
@@ -156,7 +160,6 @@ class Phone:
         self._pos = None  # pointer position in mouse units; None = unknown
         self._moves = 0
         self._link = 0  # device.links when the pointer was last homed
-        self._no_stroke = None  # device.links when the board answered that it has no "stroke" (older firmware)
         # where the pointer really landed (seen on screen) for the screen fraction we aimed at, per axis;
         # a straight-line fit through them corrects every later move, so taps get better as the agent works
         self._seen = {axis: deque(map(tuple, (saved or {}).get("seen", {}).get(axis, [])), maxlen=12)
@@ -360,35 +363,32 @@ class Phone:
                     step: float | None = None) -> None:
         await self.drag([(x1, y1), (x2, y2)], hold, step=step)
 
-    async def flick(self, x1: float, y1: float, x2: float, y2: float, step: float | None = None) -> None:
-        """A quick stroke with no rest before the release: a Home Screen page turn.
+    async def flick(self, x1: float, y1: float, x2: float, y2: float) -> None:
+        """A Home Screen page turn: the press rests before the finger moves and before it lifts.
 
-        An absolute board plays it itself ("stroke": press, STROKE_REPORTS reports 8 ms apart, release — one command),
-        because every command is one link round trip (about 170 ms over Bluetooth LE, #74): sent report by report
-        the finger crawled and iOS snapped the page back. A board without "stroke" (older firmware: "err unknown
-        command", remembered until the next link) or a relative pointer gets the stroke as a drag in ``step`` steps.
-
-        After the stroke the button is released once more, as its own command, before the pointer parks (device
-        2026-10-23, run bc067891b282: the page stood half turned after the stroke, as with a finger still down — the
-        release right after the 8 ms reports did not reach iOS; #60). A second release is a no-op when the first
-        arrived, and the pointer does not move until it is sent.
+        Device 2026-10-23 (#74): every turn that moved right after the press — report by report (0.6.8), played by
+        the board in 0.1-0.3 s ("stroke", 0.6.9-0.6.11), released twice — left the page standing two thirds turned
+        until the board was unplugged (iOS, AssistiveTouch pointer). The recipe of yoyicue/glassbox (PicoKVM, MIT)
+        turned it both ways (runs 9d10720c0f04, 91268ce870d6): the pointer reported on the start twice and resting
+        PAGE_SLIDE_SETTLE, press, PAGE_SLIDE_PICK still, PAGE_SLIDE_STEPS reports PAGE_SLIDE_STEP_S apart, then
+        PAGE_SLIDE_REST still before the release. A relative pointer drags with the same rests.
         """
-        if self.absolute and self._no_stroke != self.device.links:
-            await self.point(x1, y1)  # wakes a hidden pointer first (ABS_WAKE_AFTER)
-            ax1, ay1, ax2, ay2 = (round(min(max(t, 0), 1) * ABS_MAX) for t in (x1, y1, x2, y2))
-            try:
-                await self.device.send(f"stroke {ax1} {ay1} {ax2} {ay2} {STROKE_REPORTS}")
-            except DeviceError as e:
-                if "unknown command" not in str(e):
-                    raise
-                self._no_stroke = self.device.links
-                log.info("board has no stroke command (older firmware): page turns are dragged")
-            else:
-                self._reported = time.monotonic()
-                await self.device.send("release")
-                await self._park()
-                return
-        await self.swipe(x1, y1, x2, y2, hold=False, step=step)
+        if not self.absolute:
+            await self.drag([(x1, y1), (x2, y2)], pick=PAGE_SLIDE_PICK, rest=PAGE_SLIDE_REST)
+            return
+        await self.point(x1, y1)
+        await self._at(x1, y1)
+        await asyncio.sleep(PAGE_SLIDE_SETTLE)
+        await self.device.send("press")
+        try:
+            await asyncio.sleep(PAGE_SLIDE_PICK)
+            for i in range(1, PAGE_SLIDE_STEPS + 1):
+                await self._at(x1 + (x2 - x1) * i / PAGE_SLIDE_STEPS, y1 + (y2 - y1) * i / PAGE_SLIDE_STEPS)
+                await asyncio.sleep(PAGE_SLIDE_STEP_S)
+            await asyncio.sleep(PAGE_SLIDE_REST)
+        finally:
+            await self.device.send("release")
+        await self._park()
 
     async def drag(self, points: list[tuple[float, float]], hold: bool = True, pick: float = 0.0,
                    rest: float | None = None, aim: bool = False, stops: list[float] | None = None,

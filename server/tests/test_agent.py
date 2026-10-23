@@ -1263,11 +1263,9 @@ def test_a_guard_stop_hiccup_carries_the_menu_change(monkeypatch):
     assert ag._menu_change is None and ag.steps[-1]["action"] == "fail"
 
 
-def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the_release():
-    """Device 2026-10-22: the actor's page swipes, sent in 0.03 steps (one board round trip each, ~170 ms), were slow
-    drags: a 0.4-wide one snapped back, an edge-to-edge one held the page for seconds and entered edit mode. A long,
-    flat swipe is a page turn -> one height, at least 0.6 wide, 0.15 steps, no rest (hold=False); vertical or short
-    swipes keep the rest and the default steps."""
+def test_a_page_turn_swipe_is_a_page_slide_other_swipes_rest_before_the_release():
+    """A long, flat swipe is a page turn: sent by Phone.flick (the press rests before and after the move, #74) at the
+    actor's height from 0.92 to 0.08 of the width (or back); vertical or short swipes keep the plain swipe."""
     import asyncio
 
     from hidagent.agent import (
@@ -1275,7 +1273,6 @@ def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the
         PAGE_TURN_MAX_DY,
         PAGE_TURN_MIN_DX,
         PAGE_TURN_SPAN,
-        PAGE_TURN_STEP,
         Agent,
         page_turn,
         page_turn_stroke,
@@ -1283,14 +1280,15 @@ def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the
     from hidagent.debug import Trace
 
     assert (PAGE_TURN_MIN_DX, PAGE_TURN_MAX_DY) == (0.35, 0.15)
-    assert (PAGE_TURN_SPAN, PAGE_TURN_STEP, PAGE_TURN_MARGIN) == (0.8, 0.15, 0.05)
+    assert (PAGE_TURN_SPAN, PAGE_TURN_MARGIN) == (0.84, 0.08)
     assert page_turn(0.9, 0.5, 0.1, 0.5) and page_turn(0.2, 0.4, 0.6, 0.5) and not page_turn(0.5, 0.8, 0.5, 0.3)
     assert not page_turn(0.3, 0.5, 0.6, 0.5) and not page_turn(0.1, 0.2, 0.9, 0.6)  # too short / too steep
-    assert page_turn_stroke(0.7, 0.5, 0.3, 0.5) == (0.85, 0.5, 0.05, 0.5)  # widened to 0.8, start moved inward
-    assert page_turn_stroke(0.5, 0.5, 0.1, 0.52) == (0.85, 0.51, 0.05, 0.51)  # one height, start moved to fit
-    assert page_turn_stroke(0.9, 0.5, 0.1, 0.5) == (0.9, 0.5, 0.1, 0.5)  # already wide enough: as the actor said
-    assert page_turn_stroke(0.2, 0.5, 0.6, 0.5) == (0.15, 0.5, 0.95, 0.5)  # rightward: the previous page
-    assert page_turn_stroke(0.6, 0.5, 0.95, 0.5) == (0.15, 0.5, 0.95, 0.5)  # start moved left to fit
+    for stroke, sent in (((0.7, 0.5, 0.3, 0.5), (0.92, 0.5, 0.08, 0.5)),  # leftward: the next page
+                         ((0.5, 0.5, 0.1, 0.52), (0.92, 0.51, 0.08, 0.51)),  # one height
+                         ((0.98, 0.5, 0.02, 0.5), (0.92, 0.5, 0.08, 0.5)),  # kept off the edges
+                         ((0.2, 0.5, 0.6, 0.5), (0.08, 0.5, 0.92, 0.5)),  # rightward: the previous page
+                         ((0.6, 0.5, 0.95, 0.5), (0.08, 0.5, 0.92, 0.5))):
+        assert page_turn_stroke(*stroke) == sent, stroke
 
     calls = []
 
@@ -1298,13 +1296,13 @@ def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the
         async def swipe(self, x1, y1, x2, y2, hold=True, step=None):
             calls.append(("swipe", (x1, y1, x2, y2), hold, step))
 
-        async def flick(self, x1, y1, x2, y2, step=None):  # the board plays it (stroke), or a drag in these steps
-            calls.append(("flick", (x1, y1, x2, y2), step))
+        async def flick(self, x1, y1, x2, y2):
+            calls.append(("flick", (x1, y1, x2, y2)))
 
     ag = Agent(phone=Phone(), screen=None, actor=None, planner=None, trace=Trace(None))
     asyncio.run(ag._do({"action": "swipe", "x1": 700, "y1": 500, "x2": 300, "y2": 500}))  # page turn
     asyncio.run(ag._do({"action": "swipe", "x1": 500, "y1": 800, "x2": 500, "y2": 300}))  # a list: rest, then lift
-    assert calls == [("flick", (0.85, 0.5, 0.05, 0.5), 0.15), ("swipe", (0.5, 0.8, 0.5, 0.3), True, None)]
+    assert calls == [("flick", (0.92, 0.5, 0.08, 0.5)), ("swipe", (0.5, 0.8, 0.5, 0.3), True, None)]
 
 
 def test_the_actor_knows_the_home_screen_pages_and_where_a_page_turn_starts():
