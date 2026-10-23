@@ -1283,14 +1283,14 @@ def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the
     from hidagent.debug import Trace
 
     assert (PAGE_TURN_MIN_DX, PAGE_TURN_MAX_DY) == (0.35, 0.15)
-    assert (PAGE_TURN_SPAN, PAGE_TURN_STEP, PAGE_TURN_MARGIN) == (0.6, 0.15, 0.05)
+    assert (PAGE_TURN_SPAN, PAGE_TURN_STEP, PAGE_TURN_MARGIN) == (0.8, 0.15, 0.05)
     assert page_turn(0.9, 0.5, 0.1, 0.5) and page_turn(0.2, 0.4, 0.6, 0.5) and not page_turn(0.5, 0.8, 0.5, 0.3)
     assert not page_turn(0.3, 0.5, 0.6, 0.5) and not page_turn(0.1, 0.2, 0.9, 0.6)  # too short / too steep
-    assert page_turn_stroke(0.7, 0.5, 0.3, 0.5) == (0.7, 0.5, 0.1, 0.5)  # widened to 0.6, leftward from the start
-    assert page_turn_stroke(0.5, 0.5, 0.1, 0.52) == (0.65, 0.51, 0.05, 0.51)  # start moved inward to fit the span
+    assert page_turn_stroke(0.7, 0.5, 0.3, 0.5) == (0.85, 0.5, 0.05, 0.5)  # widened to 0.8, start moved inward
+    assert page_turn_stroke(0.5, 0.5, 0.1, 0.52) == (0.85, 0.51, 0.05, 0.51)  # one height, start moved to fit
     assert page_turn_stroke(0.9, 0.5, 0.1, 0.5) == (0.9, 0.5, 0.1, 0.5)  # already wide enough: as the actor said
-    assert page_turn_stroke(0.2, 0.5, 0.6, 0.5) == (0.2, 0.5, 0.8, 0.5)  # rightward: the previous page
-    assert page_turn_stroke(0.6, 0.5, 0.95, 0.5) == (0.35, 0.5, 0.95, 0.5)  # start moved left to fit
+    assert page_turn_stroke(0.2, 0.5, 0.6, 0.5) == (0.15, 0.5, 0.95, 0.5)  # rightward: the previous page
+    assert page_turn_stroke(0.6, 0.5, 0.95, 0.5) == (0.15, 0.5, 0.95, 0.5)  # start moved left to fit
 
     calls = []
 
@@ -1304,7 +1304,7 @@ def test_a_page_turn_swipe_is_one_wide_quick_stroke_other_swipes_rest_before_the
     ag = Agent(phone=Phone(), screen=None, actor=None, planner=None, trace=Trace(None))
     asyncio.run(ag._do({"action": "swipe", "x1": 700, "y1": 500, "x2": 300, "y2": 500}))  # page turn
     asyncio.run(ag._do({"action": "swipe", "x1": 500, "y1": 800, "x2": 500, "y2": 300}))  # a list: rest, then lift
-    assert calls == [("flick", (0.7, 0.5, 0.1, 0.5), 0.15), ("swipe", (0.5, 0.8, 0.5, 0.3), True, None)]
+    assert calls == [("flick", (0.85, 0.5, 0.05, 0.5), 0.15), ("swipe", (0.5, 0.8, 0.5, 0.3), True, None)]
 
 
 def test_the_actor_knows_the_home_screen_pages_and_where_a_page_turn_starts():

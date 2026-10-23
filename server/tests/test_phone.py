@@ -521,9 +521,11 @@ def test_a_flick_is_one_board_stroke_on_an_absolute_board(tmp_path):
     phone = Phone(FakeDevice(), tmp_path / "calibration.json", pointer="absolute")
     asyncio.run(phone.flick(0.7, 0.5, 0.1, 0.5, step=0.15))
     sent = phone.device.sent
-    assert "stroke 22937 16384 3277 16384 12" in sent and "press" not in sent and "release" not in sent
-    assert sent[sent.index("stroke 22937 16384 3277 16384 12") - 1] == "at 22937 16384"  # the pointer is there first
-    assert sent[-1] == PARK_AT
+    assert "press" not in sent
+    i = sent.index("stroke 22937 16384 3277 16384 12")
+    assert sent[i - 1] == "at 22937 16384"  # the pointer is there first
+    # run bc067891b282: the page stood half turned, as with a finger down: released again, before the pointer moves
+    assert sent[i + 1:] == ["release", PARK_AT]
 
 
 class NoStrokeDevice(FakeDevice):

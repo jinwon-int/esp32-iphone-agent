@@ -209,8 +209,9 @@ PAGE_TURN_MAX_DY = 0.15
 # width), and an edge-to-edge one held the page for seconds and entered edit mode. A page turn covers at least
 # PAGE_TURN_SPAN of the width, PAGE_TURN_MARGIN from the edges, at one height, as Phone.flick: the board plays it
 # ("stroke", 8 ms per report; run a9294c662ca6 showed 0.15 steps at the link's pace still snapped back), and a board
-# without "stroke" gets it dragged in PAGE_TURN_STEP steps.
-PAGE_TURN_SPAN = 0.6
+# without "stroke" gets it dragged in PAGE_TURN_STEP steps. 0.8 wide (was 0.6): run bc067891b282 left the page standing
+# half turned; the owner: it must be let go only after two thirds of the next page show, so the width alone carries it.
+PAGE_TURN_SPAN = 0.8
 PAGE_TURN_STEP = 0.15
 PAGE_TURN_MARGIN = 0.05
 NOTE_CHARS = 120
