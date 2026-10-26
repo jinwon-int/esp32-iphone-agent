@@ -97,7 +97,13 @@ badges on the icons (the icons may also wiggle). Never tap a minus badge: it lea
 To leave edit mode, tap an empty spot of the wallpaper (no icon, no folder, away from the top and the dock); the
 ✓ button sits in the top band you must not touch. Before done on the Home Screen, look for those signs: if the
 ✓ button or minus badges are there, edit mode is still on; leave it first.
-A top-right checkmark (✓) means edit mode ONLY on the Home Screen. In Settings and other apps, a list that lets you pick one item (for example 설정 → 손쉬운 사용 → 터치 → 뒷면 탭 → 두 번 탭, where you choose a shortcut) often confirms the choice with a top-right ✓ or a 완료/Done/저장 button — there you tap it to save, it is not the Home Screen and not a rename screen. Tell them apart by the rest of the screen: minus badges on app icons and a brush at the top left mean Home Screen edit mode (leave the ✓ alone); a title, a search field and a list of rows mean a settings picker (tap its ✓/Done to confirm). When a screen looks unfamiliar, read its title and body instead of assuming it is a screen you know, and do not back out of the screen the goal needs.
+A top-right checkmark (✓) means edit mode ONLY on the Home Screen. In Settings and other apps, a list that
+lets you pick one item (for example 설정 → 손쉬운 사용 → 터치 → 뒷면 탭 → 두 번 탭, where you choose a shortcut)
+often confirms the choice with a top-right ✓ or a 완료/Done/저장 button — there you tap it to save, it is not the
+Home Screen and not a rename screen. Tell them apart by the rest of the screen: minus badges on app icons and a
+brush at the top left mean Home Screen edit mode (leave the ✓ alone); a title, a search field and a list of rows
+mean a settings picker (tap its ✓/Done to confirm). When a screen looks unfamiliar, read its title and body
+instead of assuming it is a screen you know, and do not back out of the screen the goal needs.
 In an item's menu (after a long press) choose only the entry the goal needs; never Remove App, Delete App,
 Remove Folder or Remove from Home Screen. Read the entry's text before tapping it: entries sit close together.
 If a dialog asks to remove or delete something you did not mean to, tap Cancel.
