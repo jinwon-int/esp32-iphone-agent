@@ -617,6 +617,16 @@ def test_actor_is_told_never_to_touch_the_delete_badge_in_edit_mode():
     assert "minus" in text and "remove app" in text
 
 
+def test_actor_distinguishes_settings_confirm_checkmark_from_home_edit_mode():
+    from hidagent.agent import ACTOR_PROMPT
+
+    text = " ".join(ACTOR_PROMPT.split()).lower()
+    # a top-right checkmark means edit mode only on the Home Screen; in a settings picker it confirms the choice
+    assert "edit mode only on the home screen" in text
+    assert "settings picker" in text and ("tap it to save" in text or "tap its ✓/done to confirm" in text)
+    assert "뒷면 탭" in ACTOR_PROMPT
+
+
 def test_actor_knows_how_to_rename_a_folder_and_which_menu_entries_to_avoid():
     from hidagent.agent import ACTOR_PROMPT
 
