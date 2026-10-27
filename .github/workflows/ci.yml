@@ -54,6 +54,19 @@ jobs:
             arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=4M" \
               --build-property "compiler.cpp.extra_flags=-DABSOLUTE_POINTER=$abs -DBLE_LINK=1" hid_bridge
           done
+      - name: Build Bluetooth LE HID (BLE_LINK=1 BLE_HID=1, both pointers, #104), and check BLE_HID alone is refused
+        working-directory: hardware
+        run: |
+          echo '#define DEVICE_KEY "ci-only-not-a-real-device-key"' > hid_bridge/secrets.h
+          for abs in 0 1; do
+            arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=4M" \
+              --build-property "compiler.cpp.extra_flags=-DABSOLUTE_POINTER=$abs -DBLE_LINK=1 -DBLE_HID=1" hid_bridge
+          done
+          if arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=4M" \
+              --build-property "compiler.cpp.extra_flags=-DBLE_HID=1" hid_bridge > blehid-alone.log 2>&1; then
+            echo "BLE_HID=1 without BLE_LINK=1 should not build"; exit 1
+          fi
+          grep -q "BLE_HID=1 needs BLE_LINK=1" blehid-alone.log
       - name: Build with the away-from-home options (second Wi-Fi + WireGuard tunnel, #6; dummy keys)
         working-directory: hardware
         run: |
