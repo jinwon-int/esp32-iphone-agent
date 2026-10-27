@@ -185,7 +185,7 @@ class BleServerEvents : public BLEServerCallbacks {
     bleConnects++;
     bleLinked = true;  // advertising stops: one central at a time
 #if BLE_HID
-    blehid::lastAuth = -1;  // the new connection starts unencrypted
+    blehid::connected(desc->conn_handle);
 #endif
   }
   void onDisconnect(BLEServer *, ble_gap_conn_desc *) override {

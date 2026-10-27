@@ -66,8 +66,19 @@ class Security : public BLESecurityCallbacks {
   void onAuthenticationComplete(ble_gap_conn_desc *, int status) override { lastAuth = status; }
 };
 
+// Called from onConnect: keep this connection on 1M as well (see attach).
+inline void connected(uint16_t conn) {
+  lastAuth = -1;  // the new connection starts unencrypted
+  ble_gap_set_prefered_le_phy(conn, BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_1M_MASK, 0);
+}
+
 // Called from bleBegin() on the server the command service lives on, before advertising starts.
 inline void attach(BLEServer *server, BLEAdvertising *adv) {
+  // 1M PHY only. An iPhone asks for 2M on every connection; on a reconnect with the stored key the ESP32-S3
+  // controller then fails the encryption (device 2026-10-27: pairing worked, every later connection failed with
+  // "Failed to encrypt the connection"; the same as zephyr#108785, where turning off 2M PHY updates is the workaround).
+  // HID reports are a few bytes: 1M is plenty.
+  ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_1M_MASK);
   BLEDevice::setSecurityCallbacks(new Security());
   BLESecurity *security = new BLESecurity();  // as the library's Server_Gamepad example: kept for the program's life
   security->setAuthenticationMode(true, false, true);  // bond, no MITM (no passkey: the board has no display), SC
@@ -112,8 +123,10 @@ inline String status() {
   bool found = bleLinked && ble_gap_conn_find(bleConn, &d) == 0;
   int bonds = -1;
   ble_store_util_count(BLE_STORE_OBJ_TYPE_OUR_SEC, &bonds);
+  uint8_t txPhy = 0, rxPhy = 0;
+  if (found) ble_gap_read_le_phy(bleConn, &txPhy, &rxPhy);
   return "linked=" + String(found) + " enc=" + String(found && d.sec_state.encrypted) +
-         " bonded=" + String(found && d.sec_state.bonded) + " auth=" + String(lastAuth) + " bonds=" + String(bonds);
+         " bonded=" + String(found && d.sec_state.bonded) + " auth=" + String(lastAuth) + " bonds=" + String(bonds) + " phy=" + String(txPhy) + "/" + String(rxPhy);
 }
 
 inline bool send(BLECharacteristic *c, const void *data, size_t n) {
