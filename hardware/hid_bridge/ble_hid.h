@@ -67,17 +67,19 @@ class Security : public BLESecurityCallbacks {
 // Called from bleBegin() on the server the command service lives on, before advertising starts.
 inline void attach(BLEServer *server, BLEAdvertising *adv) {
   BLEDevice::setSecurityCallbacks(new Security());
-  BLESecurity security;
-  security.setAuthenticationMode(true, false, true);  // bond, no MITM (no passkey: the board has no display), SC
-  security.setCapability(ESP_IO_CAP_NONE);
-  security.setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
-  security.setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  BLESecurity *security = new BLESecurity();  // as the library's Server_Gamepad example: kept for the program's life
+  security->setAuthenticationMode(true, false, true);  // bond, no MITM (no passkey: the board has no display), SC
+  security->setCapability(ESP_IO_CAP_NONE);
+  security->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  security->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
   device = new BLEHIDDevice(server);
   keyboardIn = device->inputReport(REPORT_KEYBOARD);
   mouseIn = device->inputReport(REPORT_MOUSE);
   consumerIn = device->inputReport(REPORT_CONSUMER);
-  device->manufacturer("HID Bridge");
+  // manufacturer() creates the characteristic; manufacturer(String) only sets an existing one (it dereferences a null
+  // pointer when called first: a boot loop on the device, 2026-10-27)
+  device->manufacturer()->setValue("HID Bridge");
   device->pnp(0x02, 0x303A, 0x4004, 0x0100);  // USB-IF vendor id source, Espressif VID, a PID for this firmware
   device->hidInfo(0x00, 0x02);                // not localized; normally connectable
   device->reportMap((uint8_t *)REPORT_MAP, sizeof REPORT_MAP);
