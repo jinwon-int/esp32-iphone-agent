@@ -94,13 +94,25 @@ Install [arduino-cli](https://arduino.github.io/arduino-cli/) and the ESP32 core
 python3 -c 'import secrets; print(secrets.token_hex(16))'   # a board key: put it in secrets.h AND server/.env
 cp hardware/hid_bridge/secrets.example.h hardware/hid_bridge/secrets.h
 # edit secrets.h: 2.4 GHz Wi-Fi name/password, the IP address of the computer running the server, DEVICE_KEY
-hardware/flash.sh            # optional arguments: [serial port] [--debug]
+hardware/flash.sh            # optional arguments: [serial port] [--debug] [--wait] [--image PATH] [--expect-flash 8M]
 ```
 
 The board's flash size defaults to 8 MB (XIAO ESP32S3). For a 4 MB board such as the ESP32-S3-Zero or most
 ESP32-S3 Super Minis, run `FLASH_SIZE=4M hardware/flash.sh` (the firmware needs about 1 MB).
 
-A wrong flash size, a serial-port permission error, or confirming a flash without the phone? See
+To flash an image built earlier (the `build/hid_bridge.ino.merged.bin` arduino-cli leaves behind, or the app-only
+`hid_bridge.ino.bin`), pass it with `--image`; `--wait` waits for the board to be plugged in, and `--expect-flash`
+reads the chip's flash size first and refuses a mismatch. The boards of this project are all built the same way:
+
+```bash
+# the Bluetooth boards (BLE_LINK=1 BLE_HID=1, absolute pointer): an 8 MB board, and a 4 MB test board
+FLASH_SIZE=8M ABSOLUTE_POINTER=1 BLE_LINK=1 BLE_HID=1 hardware/flash.sh --dry-run        # build only, no board
+FLASH_SIZE=8M hardware/flash.sh --wait --expect-flash 8M --image hardware/build/hid_bridge.ino.merged.bin
+FLASH_SIZE=4M ABSOLUTE_POINTER=1 BLE_LINK=1 BLE_HID=1 hardware/flash.sh                  # build + flash the 4 MB one
+```
+
+A full `*.merged.bin` erases the whole flash, bonds included (pair the board again in Settings); an app-only `.bin`
+keeps them. A wrong flash size, a serial-port permission error, or confirming a flash without the phone? See
 [docs/flashing-troubleshooting.md](docs/flashing-troubleshooting.md).
 
 **Experimental:** `ABSOLUTE_POINTER=1 hardware/flash.sh` builds the board as an absolute pointer (like a tablet)
@@ -349,13 +361,16 @@ fails the handshake, sends a bad tag or a line over 512 bytes, or has more than 
 and the board advertises again. A session belongs to one connection: a new connection always gets a new hello, and
 losing the connection releases all buttons, like a dropped TCP link.
 
-**`BLE_HID=1` (with `BLE_LINK=1`, experimental, not device-tested yet, #104)** sends the mouse, keyboard and consumer
+**`BLE_HID=1` (with `BLE_LINK=1`, #104; on a phone since 2026-10-27)** sends the mouse, keyboard and consumer
 reports over a Bluetooth LE HID service on the same peripheral instead of USB, so the board needs only power near the
 phone (a USB charger or power bank), not the phone's port. Pair it once in Settings > Bluetooth ("Just Works", no
 passkey); the bonded link is then encrypted, for the commands too. Because the phone keeps one connection for HID and
 the app, the board never disconnects it: a failed handshake or bad tag ends the session, and the app starts a new one
-by subscribing to TX again. `usbreset` answers `err` in this build. Open questions: whether iOS takes an absolute
-pointer over Bluetooth the way it does over USB, and how the app finds a board the system is already connected to.
+by subscribing to TX again. `usbreset` answers `err` in this build. On the phone: iOS takes the absolute pointer over
+Bluetooth as it does over USB (`at` needs no calibration), and a board the system already holds does not advertise
+(one central at a time), so the app asks CoreBluetooth for it before scanning (iphone-agent-cast#93); after a board
+reset the phone re-encrypts the bonded link in about 2 s. `hidstat` reports the link (`linked enc bonded auth bonds
+phy`) and why the board last restarted.
 
 To try such a board before there is an app, drive it from a computer with Bluetooth (Linux needs BlueZ running):
 

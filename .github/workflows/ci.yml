@@ -83,3 +83,18 @@ jobs:
           EOF
           arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=4M" \
             --build-property "compiler.cpp.extra_flags=-DABSOLUTE_POINTER=1" hid_bridge
+      - name: flash.sh — shellcheck, then dry runs against a built image (no board; #106)
+        working-directory: hardware
+        run: |
+          command -v shellcheck >/dev/null || sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck flash.sh
+          echo '#define DEVICE_KEY "ci-only-not-a-real-device-key"' > hid_bridge/secrets.h
+          FLASH_SIZE=8M ABSOLUTE_POINTER=1 BLE_LINK=1 BLE_HID=1 ./flash.sh --dry-run
+          arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,FlashSize=8M" \
+            --build-property "compiler.cpp.extra_flags=-DABSOLUTE_POINTER=1 -DBLE_LINK=1 -DBLE_HID=1" --output-dir build hid_bridge
+          FLASH_SIZE=8M ./flash.sh --dry-run --wait=5 --expect-flash 8M --image build/hid_bridge.ino.merged.bin | tee plan.log
+          grep -q -- '-> 0x0 ' plan.log && grep -q 'expect flash: 8M' plan.log
+          ./flash.sh --dry-run --image build/hid_bridge.ino.bin | grep -q -- '-> 0x10000 '
+          ! ./flash.sh --dry-run --image build/hid_bridge.ino.bin --expect-flash 7M      # bad size is refused
+          ! ./flash.sh --dry-run --expect-flash 8M                                       # needs --image
+          ! ./flash.sh --dry-run --image build/does-not-exist.bin                        # missing image
