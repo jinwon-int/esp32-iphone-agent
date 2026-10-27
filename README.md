@@ -349,6 +349,14 @@ fails the handshake, sends a bad tag or a line over 512 bytes, or has more than 
 and the board advertises again. A session belongs to one connection: a new connection always gets a new hello, and
 losing the connection releases all buttons, like a dropped TCP link.
 
+**`BLE_HID=1` (with `BLE_LINK=1`, experimental, not device-tested yet, #104)** sends the mouse, keyboard and consumer
+reports over a Bluetooth LE HID service on the same peripheral instead of USB, so the board needs only power near the
+phone (a USB charger or power bank), not the phone's port. Pair it once in Settings > Bluetooth ("Just Works", no
+passkey); the bonded link is then encrypted, for the commands too. Because the phone keeps one connection for HID and
+the app, the board never disconnects it: a failed handshake or bad tag ends the session, and the app starts a new one
+by subscribing to TX again. `usbreset` answers `err` in this build. Open questions: whether iOS takes an absolute
+pointer over Bluetooth the way it does over USB, and how the app finds a board the system is already connected to.
+
 To try such a board before there is an app, drive it from a computer with Bluetooth (Linux needs BlueZ running):
 
 ```bash

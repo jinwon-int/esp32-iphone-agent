@@ -44,9 +44,22 @@
 // a stranger in radio range cannot drive the phone or keep the one connection for long (but can take it again and
 // again: a denial of service). The link is not BLE-encrypted; like the Wi-Fi link without WireGuard, only the tags
 // protect it (commands, incl. typed text, are readable nearby). secrets.h needs only DEVICE_KEY in this build.
+//
+// BLE_HID=1 with BLE_LINK=1 (experimental, #104, not device-tested yet) sends the mouse, keyboard and consumer
+// reports over a Bluetooth LE HID service (0x1812) on the same peripheral instead of USB, so the board only needs
+// power near the phone, not the phone's port (see ble_hid.h). Pair it once in Settings > Bluetooth; the bonded link is
+// encrypted, for the commands too. The phone keeps one connection for HID and the app, so the board never hangs it
+// up: a failed or unauthenticated session just ends, and the app starts a new one by subscribing to TX again.
+// usbreset answers err in this build.
 
 #ifndef BLE_LINK
 #define BLE_LINK 0  // 1: Bluetooth LE link to an app on the phone, no Wi-Fi; 0: TCP over Wi-Fi to the server
+#endif
+#ifndef BLE_HID
+#define BLE_HID 0  // 1 (experimental, #104): mouse + keyboard over Bluetooth LE too, so the board need not be plugged in
+#endif
+#if BLE_HID && !BLE_LINK
+#error "BLE_HID=1 needs BLE_LINK=1: the HID service shares the Bluetooth LE peripheral with the command link"
 #endif
 
 #if BLE_LINK
@@ -108,6 +121,15 @@ const int WATCHDOG_MS = 8000;  // a hung loop (e.g. blocked USB) reboots the boa
 // descriptor start with the keyboard collection and the interface protocol KEYBOARD. With the mouse first, iOS adopted
 // the board as an AssistiveTouch pointer only: no "Hardware Keyboard" in Settings, Shift ignored, and typing always
 // read with the primary language's layout (same as adafruit/Adafruit_nRF52_Arduino#870). Device test pending.
+#if BLE_HID
+#include "ble_hid.h"  // same calls, reports go over the Bluetooth LE HID service instead of USB (#104)
+BleHidKeyboard keyboard;
+BleHidMouse mouse;
+#if ABSOLUTE_POINTER
+long absX = 0, absY = 0;  // where the absolute pointer is
+#endif
+BleHidConsumer consumer;
+#else
 USBHIDKeyboard keyboard;
 #if ABSOLUTE_POINTER
 USBHIDAbsoluteMouse mouse;  // one mouse per build: both kinds share the HID report id
@@ -116,6 +138,7 @@ long absX = 0, absY = 0;    // where the absolute pointer is
 USBHIDMouse mouse;
 #endif
 USBHIDConsumerControl consumer;
+#endif
 // Consumer-page keys Apple maps for keyboards (Accessory Design Guidelines, table 14-3). Not the library's
 // CONSUMER_CONTROL_HOME (0x0223, AC Home): Apple's Home Button is 0x0040 (Menu).
 const uint16_t CONSUMER_HOME = 0x0040, CONSUMER_SEARCH = 0x0221, CONSUMER_GLOBE = 0x029D, CONSUMER_KEYBOARD = 0x01AE;
@@ -161,6 +184,9 @@ class BleServerEvents : public BLEServerCallbacks {
     bleConnectedAt = millis();
     bleConnects++;
     bleLinked = true;  // advertising stops: one central at a time
+#if BLE_HID
+    blehid::lastAuth = -1;  // the new connection starts unencrypted
+#endif
   }
   void onDisconnect(BLEServer *, ble_gap_conn_desc *) override {
     bleLinked = false;
@@ -178,6 +204,11 @@ class BleRxEvents : public BLECharacteristicCallbacks {
 class BleTxEvents : public BLECharacteristicCallbacks {
   void onSubscribe(BLECharacteristic *, ble_gap_conn_desc *, uint16_t subValue) override {
     bleSubscribed = subValue & 1;  // bit 0: notifications
+#if BLE_HID
+    // The system holds the connection for HID and the app shares it, so a connection is no longer an app session:
+    // each subscription to TX is. Counting it as a "connect" gives it its own hello, as a new connection would.
+    if (bleSubscribed) bleConnects++;
+#endif
   }
 };
 
@@ -197,6 +228,9 @@ void bleBegin() {
   BLEAdvertising *adv = BLEDevice::getAdvertising();
   adv->addServiceUUID(BLE_SERVICE);  // the app scans for this service; the name goes in the scan response
   adv->setScanResponse(true);
+#if BLE_HID
+  blehid::attach(bleServer, adv);
+#endif
   BLEDevice::startAdvertising();
 }
 
@@ -218,7 +252,12 @@ void linkWrite(const String &s) {  // the library cuts a notification at MTU - 3
   }
 }
 void linkStop() {  // hang up the greeted connection only, never one that came in since
+#if BLE_HID
+  // Never drop the connection: it is also the phone's HID link. The session is over (session = ""); the app gets a
+  // new hello only when it subscribes to TX again, and nothing it writes before that is executed.
+#else
   if (bleLinked && bleGreeted == bleConnects) bleServer->disconnect(bleGreetedConn);  // asynchronous: onDisconnect follows
+#endif
 }
 void bleDrain() {  // empty the RX buffer as its one reader (xStreamBufferReset is not safe against a concurrent write)
   uint8_t junk[64];
@@ -375,6 +414,9 @@ bool pressCombo(String combo) {
 // A locked or sleeping phone suspends USB; sending HID reports then can stall. Ask it to wake up instead,
 // and report "asleep" right away if it does not, so the board never hangs.
 bool usbReady() {
+#if BLE_HID
+  return blehid::ready();  // a bonded, encrypted connection; there is no USB to wake
+#endif
   if (tud_suspended()) {
     tud_remote_wakeup();
     for (int i = 0; i < 50 && tud_suspended(); i++) delay(10);
@@ -397,6 +439,10 @@ const long USB_RESET_OFF_MAX_MS = 1000;
 const long USB_RESET_MOUNT_MS = 3000;
 
 String usbReset(const String &arg) {
+#if BLE_HID
+  (void)arg;
+  return "err usbreset needs the USB build (this is BLE_HID)";
+#endif
   long off = arg.length() ? arg.toInt() : USB_RESET_OFF_MS;
   if (off < 100 || off > USB_RESET_OFF_MAX_MS) return "err usbreset needs off ms in 100.." + String(USB_RESET_OFF_MAX_MS);
   if (tud_mounted() && !tud_suspended()) {
@@ -419,6 +465,8 @@ String usbReset(const String &arg) {
                              : "err usbreset not mounted again within " + String(USB_RESET_MOUNT_MS) + " ms";
 }
 
+const char *resetReason();
+
 String run(const String &line) {
   int sp = line.indexOf(' ');
   String cmd = sp < 0 ? line : line.substring(0, sp);
@@ -428,7 +476,15 @@ String run(const String &line) {
 
   if (cmd == "ping") return "ok";
   if (cmd == "usbreset") return usbReset(arg);  // also when the phone has USB asleep: coming back may wake it
+#if BLE_HID
+  if (cmd == "hidstat") {  // with BLE_HID also the link, and why the board last restarted (a crash ends the link)
+    return "ok resent=" + String(hidResent) + " failed=" + String(hidFailed) + " " + blehid::status() +
+           " boot=" + resetReason() + " up=" + String(millis() / 1000);
+  }
+  if (!usbReady()) return "err phone not paired (pair the board in Settings > Bluetooth; " + blehid::status() + ")";
+#else
   if (!usbReady()) return "err phone usb asleep (unlock the phone)";
+#endif
 #if ABSOLUTE_POINTER
   if (cmd == "home") { moveAbs(0, 0); return "ok"; }
   if (cmd == "move") { moveAbs(absX + a, absY + b); return "ok"; }
@@ -654,6 +710,7 @@ bool tunnelUp() {
 void setup() {
 #if DEBUG_SERIAL
   Serial.begin(115200);
+  Serial.setDebugOutput(true);  // the core's log_x lines (with a DebugLevel build) come out here too
 #endif
   keyboard.begin();
   mouse.begin();
@@ -661,6 +718,10 @@ void setup() {
   USB.productName("HID Bridge");
   USB.onEvent(ARDUINO_USB_STARTED_EVENT, onUsbMounted);
   USB.begin();
+#if DEBUG_SERIAL
+  for (int i = 0; i < 30 && !Serial; i++) delay(100);  // give the host a moment to open the port
+  Serial.printf("boot: reset reason %d (%s)\n", (int)esp_reset_reason(), resetReason());
+#endif
 #if BLE_LINK
   bleBegin();
 #endif
@@ -706,7 +767,9 @@ bool linkReady() {
     return false;
   }
   // connected but not subscribed in time, unsubscribed, or refused: free the one connection for the app
+#if !BLE_HID  // with BLE_HID the connection is the phone's HID link and never subscribes to TX itself: keep it
   if (bleLinked && millis() - bleConnectedAt > BLE_SUBSCRIBE_MS) bleServer->disconnect(bleConn);
+#endif
   delay(20);
   return false;
 }
