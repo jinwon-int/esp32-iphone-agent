@@ -66,19 +66,34 @@ class Security : public BLESecurityCallbacks {
   void onAuthenticationComplete(ble_gap_conn_desc *, int status) override { lastAuth = status; }
 };
 
-// Called from onConnect: keep this connection on 1M as well (see attach).
-inline void connected(uint16_t conn) {
-  lastAuth = -1;  // the new connection starts unencrypted
-  ble_gap_set_prefered_le_phy(conn, BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_1M_MASK, 0);
+// arduino-esp32 3.3.12 (NimBLE, same on master): BLEService::addCharacteristic does not register a characteristic
+// whose UUID the service already has. HID has one Input Report characteristic (0x2A4D) per report id, so only the
+// keyboard's was registered: the mouse and consumer reports were missing from GATT, their service pointer was never
+// set, and the first notify on them crashed the board (device 2026-10-27, core dump: BLECharacteristic::notify ->
+// BLEService::getServer, from "release"). The service's map is keyed by the characteristic, so register them there.
+// The map is private; an explicit instantiation may name a private member, which gives a pointer to it.
+namespace detail {
+template <typename Tag, typename Tag::type M> struct Expose {
+  friend typename Tag::type member(Tag) { return M; }
+};
+struct ServiceCharacteristics {
+  typedef BLECharacteristicMap BLEService::*type;
+  friend type member(ServiceCharacteristics);
+};
+template struct Expose<ServiceCharacteristics, &BLEService::m_characteristicMap>;
+}  // namespace detail
+
+inline BLECharacteristic *inputReport(uint8_t reportId) {
+  BLECharacteristic *c = device->inputReport(reportId);
+  BLECharacteristicMap &map = device->hidService()->*member(detail::ServiceCharacteristics());
+  bool registered = false;
+  for (BLECharacteristic *p = map.getFirst(); p; p = map.getNext()) registered |= p == c;
+  if (!registered) map.setByUUID(c, c->getUUID());  // a core that registers it itself: nothing to do
+  return c;
 }
 
 // Called from bleBegin() on the server the command service lives on, before advertising starts.
 inline void attach(BLEServer *server, BLEAdvertising *adv) {
-  // 1M PHY only. An iPhone asks for 2M on every connection; on a reconnect with the stored key the ESP32-S3
-  // controller then fails the encryption (device 2026-10-27: pairing worked, every later connection failed with
-  // "Failed to encrypt the connection"; the same as zephyr#108785, where turning off 2M PHY updates is the workaround).
-  // HID reports are a few bytes: 1M is plenty.
-  ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_1M_MASK, BLE_GAP_LE_PHY_1M_MASK);
   BLEDevice::setSecurityCallbacks(new Security());
   BLESecurity *security = new BLESecurity();  // as the library's Server_Gamepad example: kept for the program's life
   security->setAuthenticationMode(true, false, true);  // bond, no MITM (no passkey: the board has no display), SC
@@ -87,9 +102,9 @@ inline void attach(BLEServer *server, BLEAdvertising *adv) {
   security->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
   device = new BLEHIDDevice(server);
-  keyboardIn = device->inputReport(REPORT_KEYBOARD);
-  mouseIn = device->inputReport(REPORT_MOUSE);
-  consumerIn = device->inputReport(REPORT_CONSUMER);
+  keyboardIn = inputReport(REPORT_KEYBOARD);
+  mouseIn = inputReport(REPORT_MOUSE);
+  consumerIn = inputReport(REPORT_CONSUMER);
   // manufacturer() creates the characteristic; manufacturer(String) only sets an existing one (it dereferences a null
   // pointer when called first: a boot loop on the device, 2026-10-27)
   device->manufacturer()->setValue("HID Bridge");
@@ -192,7 +207,11 @@ public:
     blehid::send(blehid::keyboardIn, report, sizeof report);
     return 1;
   }
+  // Only when something is down: hid_bridge.ino calls this on every idle loop (every 20 ms), harmless over USB but a
+  // notification each time over BLE -- device 2026-10-27, the flood crashed the board as soon as the link encrypted.
   void releaseAll() {
+    static const uint8_t none[8] = {0};
+    if (!memcmp(report, none, sizeof report)) return;
     memset(report, 0, sizeof report);
     blehid::send(blehid::keyboardIn, report, sizeof report);
   }
@@ -255,9 +274,16 @@ private:
 class BleHidConsumer {
 public:
   void begin() {}
-  bool press(uint16_t usage) { return blehid::send(blehid::consumerIn, &usage, sizeof usage); }
-  bool release() {
-    uint16_t none = 0;
-    return blehid::send(blehid::consumerIn, &none, sizeof none);
+  bool press(uint16_t usage) {
+    down = usage;
+    return blehid::send(blehid::consumerIn, &usage, sizeof usage);
   }
+  bool release() {  // only when a key is down: called on every idle loop, as BleHidKeyboard::releaseAll
+    if (!down) return true;
+    down = 0;
+    return blehid::send(blehid::consumerIn, &down, sizeof down);
+  }
+
+private:
+  uint16_t down = 0;
 };

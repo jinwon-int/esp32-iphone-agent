@@ -185,7 +185,7 @@ class BleServerEvents : public BLEServerCallbacks {
     bleConnects++;
     bleLinked = true;  // advertising stops: one central at a time
 #if BLE_HID
-    blehid::connected(desc->conn_handle);
+    blehid::lastAuth = -1;  // the new connection starts unencrypted
 #endif
   }
   void onDisconnect(BLEServer *, ble_gap_conn_desc *) override {
@@ -465,6 +465,8 @@ String usbReset(const String &arg) {
                              : "err usbreset not mounted again within " + String(USB_RESET_MOUNT_MS) + " ms";
 }
 
+const char *resetReason();
+
 String run(const String &line) {
   int sp = line.indexOf(' ');
   String cmd = sp < 0 ? line : line.substring(0, sp);
@@ -475,7 +477,10 @@ String run(const String &line) {
   if (cmd == "ping") return "ok";
   if (cmd == "usbreset") return usbReset(arg);  // also when the phone has USB asleep: coming back may wake it
 #if BLE_HID
-  if (cmd == "hidstat") return "ok resent=" + String(hidResent) + " failed=" + String(hidFailed) + " " + blehid::status();
+  if (cmd == "hidstat") {  // with BLE_HID also the link, and why the board last restarted (a crash ends the link)
+    return "ok resent=" + String(hidResent) + " failed=" + String(hidFailed) + " " + blehid::status() +
+           " boot=" + resetReason() + " up=" + String(millis() / 1000);
+  }
   if (!usbReady()) return "err phone not paired (pair the board in Settings > Bluetooth; " + blehid::status() + ")";
 #else
   if (!usbReady()) return "err phone usb asleep (unlock the phone)";
@@ -705,6 +710,7 @@ bool tunnelUp() {
 void setup() {
 #if DEBUG_SERIAL
   Serial.begin(115200);
+  Serial.setDebugOutput(true);  // the core's log_x lines (with a DebugLevel build) come out here too
 #endif
   keyboard.begin();
   mouse.begin();
@@ -712,6 +718,10 @@ void setup() {
   USB.productName("HID Bridge");
   USB.onEvent(ARDUINO_USB_STARTED_EVENT, onUsbMounted);
   USB.begin();
+#if DEBUG_SERIAL
+  for (int i = 0; i < 30 && !Serial; i++) delay(100);  // give the host a moment to open the port
+  Serial.printf("boot: reset reason %d (%s)\n", (int)esp_reset_reason(), resetReason());
+#endif
 #if BLE_LINK
   bleBegin();
 #endif
