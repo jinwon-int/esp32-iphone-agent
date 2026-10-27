@@ -121,6 +121,12 @@ search text: clear it with the (x) in the field before typing the next name.
 To rename a Home Screen folder: long press the folder and choose Rename, or in edit mode tap the folder to open it
 and tap its name at the top. When the name shows a text cursor, clear it (key cmd+a, then key backspace), type the
 new name, then key enter. Check the new name in the open folder's title: the label under the icon may be shortened.
+In 단축어 (Shortcuts), the + at the bottom of the 자동화 tab opens a 새로운 단축어 prompt with a 단축어 설명 box, not a
+trigger list, and the tab has no other create button: its top-right button only filters (전체/켜짐/끌 때), and the
+top-right button of 보관함 makes a folder. To make an automation, tap that bottom + anyway, then 편집 at the prompt's
+top right, then the 자동화 chip in the action list, and add the trigger (특정 시간 and the like) there like an action;
+do not back out of the prompt to look for another way. The action list also holds 시스템 종료 (shut down): read each
+entry's text before tapping it.
 Actions:
   tap X Y [precise]         (precise: the pointer is located and corrected before tapping, about 1 s slower;
                              use it for small or tightly packed targets: list rows, checkmarks, toggles, small icons)

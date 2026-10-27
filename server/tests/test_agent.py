@@ -627,6 +627,19 @@ def test_actor_distinguishes_settings_confirm_checkmark_from_home_edit_mode():
     assert "뒷면 탭" in ACTOR_PROMPT
 
 
+def test_actor_knows_the_shortcuts_automation_path_and_its_dead_ends():
+    from hidagent.agent import ACTOR_PROMPT
+
+    text = " ".join(ACTOR_PROMPT.split())
+    # 2026-10-26 (3d723d54c86b, dfee526509af): the bottom + of the 자동화 tab opens a 새로운 단축어 prompt, not a
+    # trigger list; the agent looped between that prompt and the tab, or tried the top-right filter, until the step
+    # limit. What worked on the phone: bottom + → 편집 → the 자동화 chip in the action list → the trigger.
+    assert "새로운 단축어" in text and "편집" in text and "자동화 chip" in text and "특정 시간" in text
+    assert "not a trigger list" in text
+    assert "전체/켜짐/끌 때" in text and "보관함" in text
+    assert "시스템 종료" in text  # the action list holds a shut-down action next to the ones the goal needs
+
+
 def test_actor_knows_how_to_rename_a_folder_and_which_menu_entries_to_avoid():
     from hidagent.agent import ACTOR_PROMPT
 
