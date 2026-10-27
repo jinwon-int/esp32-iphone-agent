@@ -157,6 +157,7 @@ inline bool send(BLECharacteristic *c, const void *data, size_t n) {
 
 class BleHidKeyboard {
 public:
+  static const int KEY_MS = 15;
   void begin() {}
   size_t press(uint8_t k) {  // same mapping as USBHIDKeyboard::press (core 3.x)
     if (k >= 0x88) {
@@ -215,11 +216,13 @@ public:
     memset(report, 0, sizeof report);
     blehid::send(blehid::keyboardIn, report, sizeof report);
   }
+  // 15 ms, not USBHIDKeyboard's 5: a key's press and release must not both fall in one connection interval
+  // (iOS: 15 ms or more). Device 2026-10-27, at 5 ms "blehid test" came out as "blehidtest".
   size_t write(uint8_t c) {
     size_t p = press(c);
-    delay(5);
+    delay(KEY_MS);
     release(c);
-    delay(5);
+    delay(KEY_MS);
     return p;
   }
   size_t print(const String &s) {
