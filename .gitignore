@@ -9,8 +9,8 @@ __pycache__/
 .env
 hardware/hid_bridge/secrets.h
 
-# Build output
-hardware/build/
+# Build output (any `build*` dir: images carry the device key from secrets.h)
+hardware/build*/
 hardware/hid_bridge/build/
 
 # Editors and OS

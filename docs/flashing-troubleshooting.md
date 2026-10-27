@@ -20,7 +20,29 @@ Reflash with the real size:
 FLASH_SIZE=4M hardware/flash.sh [port]
 ```
 
-Not sure of the size? `esptool --port <port> flash-id` prints the detected flash chip size.
+Not sure of the size? `esptool --port <port> flash-id` prints the detected flash chip size. With `--image`,
+`flash.sh` does this itself and refuses a mismatch (`--expect-flash`, default `FLASH_SIZE`).
+
+## Flash an image built earlier (`--image`), wait for the board (`--wait`)
+
+`flash.sh` can skip the build and write an image with esptool — the one arduino-cli leaves in `hardware/build/`
+after a build, or a copy kept from an earlier release:
+
+```bash
+# build once (no board needed), then flash whichever board gets plugged in, checking it really has 8 MB
+FLASH_SIZE=8M ABSOLUTE_POINTER=1 BLE_LINK=1 BLE_HID=1 hardware/flash.sh --dry-run
+FLASH_SIZE=8M hardware/flash.sh --wait --expect-flash 8M --image hardware/build/hid_bridge.ino.merged.bin
+```
+
+| Image | Written at | Effect |
+|---|---|---|
+| `hid_bridge.ino.merged.bin` (bootloader + partitions + app) | `0x0` | erases the whole flash, **NVS included: a `BLE_HID` board loses its bonds and must be paired again** in Settings > Bluetooth |
+| `hid_bridge.ino.bin` (the app alone) | `0x10000` | keeps NVS: bonds and settings survive, so the phone re-encrypts the link by itself after the reset |
+
+The sequence is the one that works on a running board: a 1200-baud touch into the ROM bootloader, `flash-id` (the
+size check), `write-flash` without a reset in between, `read-mac`, then a watchdog reset (a DTR reset does nothing on
+USB-Serial/JTAG). The MAC and the image's SHA-256 are printed at the end: note them with the board. `--dry-run`
+prints the plan — tools, image, offset, port — and exits without touching a board; CI runs it on every change.
 
 ## "Permission denied" opening the serial port
 
