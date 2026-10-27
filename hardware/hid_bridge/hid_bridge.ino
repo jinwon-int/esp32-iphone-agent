@@ -185,15 +185,12 @@ class BleServerEvents : public BLEServerCallbacks {
     bleConnects++;
     bleLinked = true;  // advertising stops: one central at a time
 #if BLE_HID
-    blehid::secured = false;  // until the bonded link is encrypted again (onAuthenticationComplete)
+    blehid::lastAuth = -1;  // the new connection starts unencrypted
 #endif
   }
   void onDisconnect(BLEServer *, ble_gap_conn_desc *) override {
     bleLinked = false;
     bleSubscribed = false;  // advertising restarts (advertiseOnDisconnect)
-#if BLE_HID
-    blehid::secured = false;
-#endif
   }
 };
 
@@ -478,7 +475,8 @@ String run(const String &line) {
   if (cmd == "ping") return "ok";
   if (cmd == "usbreset") return usbReset(arg);  // also when the phone has USB asleep: coming back may wake it
 #if BLE_HID
-  if (!usbReady()) return "err phone not paired (pair the board in Settings > Bluetooth)";
+  if (cmd == "hidstat") return "ok resent=" + String(hidResent) + " failed=" + String(hidFailed) + " " + blehid::status();
+  if (!usbReady()) return "err phone not paired (pair the board in Settings > Bluetooth; " + blehid::status() + ")";
 #else
   if (!usbReady()) return "err phone usb asleep (unlock the phone)";
 #endif

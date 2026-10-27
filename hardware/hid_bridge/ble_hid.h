@@ -18,7 +18,10 @@
 #include "keyboardLayout/KeyboardLayout.h"  // SHIFT, ALT_GR, ISO_KEY: the layout table's flag bits
 #include "USBHIDMouse.h"     // MOUSE_LEFT ...; hid_mouse_report_t / hid_abs_mouse_report_t come from tusb.h
 
-extern volatile bool bleLinked;  // hid_bridge.ino: a central is connected
+#include "host/ble_store.h"  // ble_store_util_count: how many phones the board holds a bond with
+
+extern volatile bool bleLinked;      // hid_bridge.ino: a central is connected
+extern volatile uint16_t bleConn;    // ... and its connection handle
 
 namespace blehid {
 
@@ -54,14 +57,13 @@ static const uint8_t REPORT_MAP[] = {
 
 BLEHIDDevice *device = nullptr;
 BLECharacteristic *keyboardIn = nullptr, *mouseIn = nullptr, *consumerIn = nullptr;
-volatile bool secured = false;  // the current connection finished pairing / re-encrypted with the bond
+volatile int lastAuth = -1;  // status of the current connection's last encryption change (0 = ok); -1: none yet
+unsigned long askedAt = 0;    // when the board last asked the phone to encrypt (loop task only)
 
 class Security : public BLESecurityCallbacks {
   bool onSecurityRequest() override { return true; }
   bool onConfirmPIN(uint32_t) override { return true; }  // not used with "Just Works" (no input / no output)
-  void onAuthenticationComplete(ble_gap_conn_desc *desc, int status) override {
-    secured = status == 0 && desc && desc->sec_state.encrypted;
-  }
+  void onAuthenticationComplete(ble_gap_conn_desc *, int status) override { lastAuth = status; }
 };
 
 // Called from bleBegin() on the server the command service lives on, before advertising starts.
@@ -88,8 +90,31 @@ inline void attach(BLEServer *server, BLEAdvertising *adv) {
   adv->addServiceUUID(device->hidService()->getUUID());
 }
 
-// Ready = a central is connected over an encrypted, bonded link. Reports sent otherwise are dropped by the stack.
-inline bool ready() { return bleLinked && secured; }
+// Ready = a central is connected over an encrypted link. Reports sent otherwise are dropped by the stack.
+// The link's own state is the answer, not a flag kept from callbacks: device 2026-10-27, the phone was paired and
+// connected in Settings and the app linked, yet a flag set on the encryption event said "not paired".
+// Not encrypted: ask the phone to encrypt (again), at most every 2 s; an iPhone that holds the bond does so at once.
+inline bool ready() {
+  if (!bleLinked) return false;
+  ble_gap_conn_desc d;
+  if (ble_gap_conn_find(bleConn, &d) != 0) return false;
+  if (d.sec_state.encrypted) return true;
+  if (millis() - askedAt > 2000) {
+    askedAt = millis();
+    ble_gap_security_initiate(bleConn);
+  }
+  return false;
+}
+
+// For "hidstat" and the not-paired error: what the link looks like from the board.
+inline String status() {
+  ble_gap_conn_desc d = {};
+  bool found = bleLinked && ble_gap_conn_find(bleConn, &d) == 0;
+  int bonds = -1;
+  ble_store_util_count(BLE_STORE_OBJ_TYPE_OUR_SEC, &bonds);
+  return "linked=" + String(found) + " enc=" + String(found && d.sec_state.encrypted) +
+         " bonded=" + String(found && d.sec_state.bonded) + " auth=" + String(lastAuth) + " bonds=" + String(bonds);
+}
 
 inline bool send(BLECharacteristic *c, const void *data, size_t n) {
   if (!c || !ready()) return false;
