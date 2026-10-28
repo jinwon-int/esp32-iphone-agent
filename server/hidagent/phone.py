@@ -629,7 +629,8 @@ class Phone:
             await self._select_language(False)
 
     async def _select_language(self, korean: bool) -> None:
-        """English: `lang2`. Korean: `lang2` then one toggle. A short wait so the next key is read in the new language."""
+        """English: `lang2`. Korean: `lang2` then one toggle. A short wait so the next key is read in the new
+        language."""
         await self.device.send(f"key {self.ENGLISH_KEY}")
         if korean:
             await self.device.send(f"key {self.TOGGLE_KEY}")
