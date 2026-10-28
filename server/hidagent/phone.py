@@ -598,10 +598,19 @@ class Phone:
         await self.point(x, y)
         await self.device.send(f"scroll {lines} 0")
 
+    # The key that selects the English input language whatever the phone is in: HID LANG2 (0x91, "英数" on Apple
+    # keyboards) -- device 2026-10-28 (iphone-agent-cast#95, run 79468b9d9285): from Korean, `lang2` then `abc` gave
+    # `abc`; `lang1` (0x90) did not select Korean. Korean is one toggle (ctrl+space) from English when the phone has
+    # those two keyboards, as it does. A short wait after a switch: the mixed-sentence run 068ec07221b9 lost spaces
+    # right after one.
+    ENGLISH_KEY = "lang2"
+    TOGGLE_KEY = "ctrl+space"
+    LANGUAGE_SWITCH_SETTLE = 0.15
+
     async def type(self, text: str, piece: int = 200) -> None:
-        """ASCII as it is; Korean as 2-set layout keys. Mixed text is typed run by run, the input language switched
-        (key ctrl+space) between a Korean and an English run and switched back at the end, so the phone is left in
-        the language it started in; which language that is remains the phone's state (the agent checks the field)."""
+        """ASCII as it is; Korean as 2-set layout keys. The input language is set, not guessed: `lang2` before an
+        English run (always English), `lang2` then `ctrl+space` before a Korean run, and `lang2` at the end so the
+        phone is left in English -- whatever it was in before (iphone-agent-cast#95)."""
         runs = script_runs(text) if has_hangul(text) else [(False, text)]
         keys = []
         for korean, run in runs:
@@ -613,12 +622,19 @@ class Phone:
                 raise DeviceError("only ASCII or Korean text can be typed")
             keys.append(part)
         for n, part in enumerate(keys):
-            if n:
-                await self.device.send("key ctrl+space")
+            await self._select_language(runs[n][0])
             for i in range(0, len(part), piece):  # the board takes lines of limited length
                 await self.device.send(f"type {part[i:i + piece]}")
-        if len(keys) > 1 and len(keys) % 2 == 0:  # an odd number of switches: back to the language we started in
-            await self.device.send("key ctrl+space")
+        if runs and runs[-1][0]:  # left in English, as found
+            await self._select_language(False)
+
+    async def _select_language(self, korean: bool) -> None:
+        """English: `lang2`. Korean: `lang2` then one toggle. A short wait so the next key is read in the new
+        language."""
+        await self.device.send(f"key {self.ENGLISH_KEY}")
+        if korean:
+            await self.device.send(f"key {self.TOGGLE_KEY}")
+        await asyncio.sleep(self.LANGUAGE_SWITCH_SETTLE)
 
     async def key(self, combo: str) -> None:
         await self.device.send(f"key {combo}")

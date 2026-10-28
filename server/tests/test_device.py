@@ -294,7 +294,7 @@ def test_long_text_is_typed_in_pieces():
     phone = Phone.__new__(Phone)
     phone.device = Recorder()
     asyncio.run(phone.type("x" * 450))
-    assert [len(c) for c in phone.device.sent] == [205, 205, 55]
+    assert [len(c) for c in phone.device.sent] == [9, 205, 205, 55]  # "key lang2", then 200-char pieces
 
 
 def test_over_long_hello_is_refused_without_an_unhandled_error(caplog):
