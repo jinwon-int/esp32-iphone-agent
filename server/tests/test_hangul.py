@@ -74,13 +74,13 @@ def make_phone(tmp_path):
 def test_phone_types_korean_as_dubeolsik_keys(tmp_path):
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("설정"))
-    assert phone.device.sent == ["type tjfwjd"]
+    assert phone.device.sent == ["key lang2", "key ctrl+space", "type tjfwjd", "key lang2"]
 
 
 def test_phone_still_types_english_as_is_and_refuses_other_scripts(tmp_path):
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("Settings"))
-    assert phone.device.sent == ["type Settings"]
+    assert phone.device.sent == ["key lang2", "type Settings"]
     with pytest.raises(DeviceError):
         asyncio.run(phone.type("設定"))  # neither ASCII nor Hangul
 
@@ -95,14 +95,16 @@ def test_script_runs_split_mixed_text_keeping_neutral_characters_with_their_run(
     assert script_runs("") == []
 
 
-def test_phone_types_mixed_text_run_by_run_switching_the_input_language(tmp_path):
-    # a Korean run, switch, an English run, and the switch back so the phone keeps the language it started in
+def test_phone_types_mixed_text_run_by_run_setting_the_input_language(tmp_path):
+    # the language is set before every run (lang2 = always English; Korean = lang2 then one toggle) and left in
+    # English at the end -- device 2026-10-28, iphone-agent-cast#95 (lang1 does not select Korean)
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("교보eBook"))
-    assert phone.device.sent == ["type ryqh", "key ctrl+space", "type eBook", "key ctrl+space"]
+    assert phone.device.sent == ["key lang2", "key ctrl+space", "type ryqh", "key lang2", "type eBook"]
     phone = make_phone(tmp_path)
-    asyncio.run(phone.type("설정 Wi-Fi 켜기"))  # three runs: two switches, already back in Korean
-    assert phone.device.sent == ["type tjfwjd ", "key ctrl+space", "type Wi-Fi ", "key ctrl+space", "type zurl"]
+    asyncio.run(phone.type("설정 Wi-Fi 켜기"))  # three runs; the last is Korean, so English is restored at the end
+    assert phone.device.sent == ["key lang2", "key ctrl+space", "type tjfwjd ", "key lang2", "type Wi-Fi ",
+                                 "key lang2", "key ctrl+space", "type zurl", "key lang2"]
 
 
 def test_actor_prompt_explains_input_language_and_fast_clearing():
@@ -123,4 +125,4 @@ def test_absolute_pointer_parks_after_a_tap_and_a_drag_not_after_typing(tmp_path
     assert phone.device.sent[-2:] == ["release", park]
     phone.device.sent.clear()
     asyncio.run(phone.type("abc"))
-    assert phone.device.sent == ["type abc"]
+    assert phone.device.sent == ["key lang2", "type abc"]  # the language key, then the text; no park
