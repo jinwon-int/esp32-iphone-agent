@@ -74,7 +74,7 @@ def make_phone(tmp_path):
 def test_phone_types_korean_as_dubeolsik_keys(tmp_path):
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("설정"))
-    assert phone.device.sent == ["key lang2", "key ctrl+space", "type tjfwjd", "key lang2"]
+    assert phone.device.sent == ["key lang2", "key capslock", "type tjfwjd", "key lang2"]
 
 
 def test_phone_still_types_english_as_is_and_refuses_other_scripts(tmp_path):
@@ -100,14 +100,14 @@ def test_phone_types_mixed_text_run_by_run_setting_the_input_language(tmp_path):
     # English at the end -- device 2026-10-28, iphone-agent-cast#95 (lang1 does not select Korean)
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("교보eBook"))
-    assert phone.device.sent == ["key lang2", "key ctrl+space", "type ryqh", "key lang2", "type eBook"]
+    assert phone.device.sent == ["key lang2", "key capslock", "type ryqh", "key lang2", "type eBook"]
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("설정 Wi-Fi 켜기"))  # three runs; the last is Korean, so English is restored at the end
-    assert phone.device.sent == ["key lang2", "key ctrl+space", "type tjfwjd", "key space", "key lang2", "type Wi-Fi ",
-                                 "key lang2", "key ctrl+space", "type zurl", "key lang2"]
+    assert phone.device.sent == ["key lang2", "key capslock", "type tjfwjd", "key space", "key lang2", "type Wi-Fi ",
+                                 "key lang2", "key capslock", "type zurl", "key lang2"]
 
 
-def test_phone_types_spaces_in_korean_in_korean_after_a_pause(tmp_path, monkeypatch):
+def test_phone_types_spaces_in_korean_in_korean(tmp_path, monkeypatch):
     # the default: Korean stays selected, a short pause before each space (iphone-agent-cast#95, 2026-10-29)
     slept = []
 
@@ -116,10 +116,14 @@ def test_phone_types_spaces_in_korean_in_korean_after_a_pause(tmp_path, monkeypa
     monkeypatch.setattr("hidagent.phone.asyncio.sleep", sleep)
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("이름을 스크린샷 분류로 변경"))
-    k, e, sp = ["key lang2", "key ctrl+space"], ["key lang2"], ["key space"]
+    k, e, sp = ["key lang2", "key capslock"], ["key lang2"], ["key space"]
     assert phone.device.sent == (k + ["type dlfmadmf"] + sp + ["type tmzmflstit"] + sp + ["type qnsfbfh"] + sp
                                  + ["type qusrud"] + e)
-    assert slept.count(phone.KOREAN_SPACE_GAP) == 3 and phone.KOREAN_SPACE_GAP == 0.3
+    assert phone.KOREAN_SPACE_GAP == 0 and 0 not in slept  # capslock leaves the next space alone: no pause
+    phone = make_phone(tmp_path)
+    phone.KOREAN_SPACE_GAP = 0.5  # a pause can still be set (the ctrl+space era needed 0.5 s)
+    asyncio.run(phone.type("이름을 스크린샷 분류로 변경"))
+    assert slept.count(0.5) == 3
     phone = make_phone(tmp_path)
     asyncio.run(phone.type(" 가  나 "))  # leading, repeated and trailing spaces: one key each, Korean all along
     assert phone.device.sent == (k + sp + ["type rk"] + sp + sp + ["type sk"] + sp + e)
@@ -131,7 +135,7 @@ def test_phone_can_still_type_spaces_in_korean_in_english(tmp_path):
     phone = make_phone(tmp_path)
     phone.korean_space_switch = True
     asyncio.run(phone.type("이름을 스크린샷 분류로 변경"))
-    k, e, sp = ["key lang2", "key ctrl+space"], ["key lang2"], ["key space"]
+    k, e, sp = ["key lang2", "key capslock"], ["key lang2"], ["key space"]
     assert phone.device.sent == (k + ["type dlfmadmf"] + e + sp + k + ["type tmzmflstit"] + e + sp + k
                                  + ["type qnsfbfh"] + e + sp + k + ["type qusrud"] + e)
 

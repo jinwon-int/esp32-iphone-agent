@@ -604,7 +604,12 @@ class Phone:
     # those two keyboards, as it does. A short wait after a switch: the mixed-sentence run 068ec07221b9 lost spaces
     # right after one.
     ENGLISH_KEY = "lang2"
-    TOGGLE_KEY = "ctrl+space"
+    # Korean is one Caps Lock away from English (iOS: 설정 > 일반 > 키보드 > 하드웨어 키보드 >
+    # "Caps Lock 언어 전환" on).
+    # ctrl+space switched too, but iOS then spent the next space on it: the first space after the switch was lost
+    # even 0.4 s later, while after capslock `r k space s k` 0.1 s apart typed "가 나" (iphone-agent-cast#95,
+    # 2026-10-29 ecf7e601231d; owner's guess).
+    TOGGLE_KEY = "capslock"
     # 0.15 s was too short: on the device a `key space` sent 0.15 s after `lang2` was dropped every time, the same
     # space sent seconds later went in (iphone-agent-cast#95, 2026-10-29 note test f77aea029cba vs 3f4354bfc104).
     LANGUAGE_SWITCH_SETTLE = 0.6
@@ -612,14 +617,14 @@ class Phone:
     # spaces lost in 0.7.9 (`key space` right after the last syllable's keys, 89461b311763) look like the same
     # "too fast" as the language switch (iphone-agent-cast#95, 2026-10-29). korean_space_switch=True keeps the
     # 0.7.12 way (switch to English for the space, then back) that typed it right but costs ~1.2 s per space.
-    KOREAN_SPACE_GAP = 0.3
+    KOREAN_SPACE_GAP = 0.0  # no pause needed after a capslock switch (ecf7e601231d); 0.5 s was needed with ctrl+space
     korean_space_switch = False
 
     async def type(self, text: str, piece: int = 200) -> None:
         """ASCII as it is; Korean as 2-set layout keys, each space in a Korean run a `key space` after a short pause
         (or typed in English with korean_space_switch). The
         input language is set, not guessed: `lang2` before an English run (always English), `lang2` then
-        `ctrl+space` before a Korean run, and `lang2` at the end so the phone is left in English -- whatever it was
+        `capslock` before a Korean run, and `lang2` at the end so the phone is left in English -- whatever it was
         in before (iphone-agent-cast#95)."""
         runs = script_runs(text) if has_hangul(text) else [(False, text)]
         keys = []
@@ -646,7 +651,7 @@ class Phone:
                         if korean_now:
                             await self._select_language(False)
                             korean_now = False
-                    else:
+                    elif self.KOREAN_SPACE_GAP > 0:
                         await asyncio.sleep(self.KOREAN_SPACE_GAP)
                     await self.device.send("key space")
                 if word and runs[n][0] and not korean_now:
