@@ -608,7 +608,7 @@ class Phone:
     LANGUAGE_SWITCH_SETTLE = 0.15
 
     async def type(self, text: str, piece: int = 200) -> None:
-        """ASCII as it is; Korean as 2-set layout keys, each space in a Korean run a `key space` of its own. The
+        """ASCII as it is; Korean as 2-set layout keys, each space in a Korean run a `key space` typed in English. The
         input language is set, not guessed: `lang2` before an English run (always English), `lang2` then
         `ctrl+space` before a Korean run, and `lang2` at the end so the phone is left in English -- whatever it was
         in before (iphone-agent-cast#95)."""
@@ -622,17 +622,27 @@ class Phone:
             if not part.isascii():  # the USB keyboard can only type ASCII; fail clearly instead of typing garbage
                 raise DeviceError("only ASCII or Korean text can be typed")
             keys.append(part)
+        korean_now = False
         for n, part in enumerate(keys):
-            await self._select_language(runs[n][0])
-            # A space inside Korean is its own key: `type` of a whole Korean sentence dropped spaces on the device,
-            # word by word with `key space` typed it right (iphone-agent-cast#95, 2026-10-29, 823bcdd5a351).
-            words = part.split(" ") if runs[n][0] else [part]
+            korean_now = runs[n][0]
+            await self._select_language(korean_now)
+            # A space inside Korean is typed in English: while a syllable with a final consonant is still being
+            # composed, iOS spends the space on finishing it -- `이름을스크린샷분류로 변경`, the spaces after 을 and
+            # 샷 gone, the one after 로 kept (iphone-agent-cast#95, 2026-10-29 runs 823bcdd5a351, 89461b311763).
+            # Switching to English finishes the syllable first, as the per-word run 1113f8c879c5 did.
+            words = part.split(" ") if korean_now else [part]
             for w, word in enumerate(words):
                 if w:
+                    if korean_now:
+                        await self._select_language(False)
+                        korean_now = False
                     await self.device.send("key space")
+                if word and runs[n][0] and not korean_now:
+                    await self._select_language(True)
+                    korean_now = True
                 for i in range(0, len(word), piece):  # the board takes lines of limited length
                     await self.device.send(f"type {word[i:i + piece]}")
-        if runs and runs[-1][0]:  # left in English, as found
+        if korean_now:  # left in English, as found
             await self._select_language(False)
 
     async def _select_language(self, korean: bool) -> None:
