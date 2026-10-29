@@ -608,9 +608,10 @@ class Phone:
     LANGUAGE_SWITCH_SETTLE = 0.15
 
     async def type(self, text: str, piece: int = 200) -> None:
-        """ASCII as it is; Korean as 2-set layout keys. The input language is set, not guessed: `lang2` before an
-        English run (always English), `lang2` then `ctrl+space` before a Korean run, and `lang2` at the end so the
-        phone is left in English -- whatever it was in before (iphone-agent-cast#95)."""
+        """ASCII as it is; Korean as 2-set layout keys, each space in a Korean run a `key space` of its own. The
+        input language is set, not guessed: `lang2` before an English run (always English), `lang2` then
+        `ctrl+space` before a Korean run, and `lang2` at the end so the phone is left in English -- whatever it was
+        in before (iphone-agent-cast#95)."""
         runs = script_runs(text) if has_hangul(text) else [(False, text)]
         keys = []
         for korean, run in runs:
@@ -623,8 +624,14 @@ class Phone:
             keys.append(part)
         for n, part in enumerate(keys):
             await self._select_language(runs[n][0])
-            for i in range(0, len(part), piece):  # the board takes lines of limited length
-                await self.device.send(f"type {part[i:i + piece]}")
+            # A space inside Korean is its own key: `type` of a whole Korean sentence dropped spaces on the device,
+            # word by word with `key space` typed it right (iphone-agent-cast#95, 2026-10-29, 823bcdd5a351).
+            words = part.split(" ") if runs[n][0] else [part]
+            for w, word in enumerate(words):
+                if w:
+                    await self.device.send("key space")
+                for i in range(0, len(word), piece):  # the board takes lines of limited length
+                    await self.device.send(f"type {word[i:i + piece]}")
         if runs and runs[-1][0]:  # left in English, as found
             await self._select_language(False)
 
