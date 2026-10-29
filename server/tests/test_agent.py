@@ -1222,7 +1222,7 @@ def test_spotlight_korean_mistyped_is_typed_again_at_the_next_rounds_ocr_read():
              ("type", "시계")]
 
     agent = run("시계", [[line("Siri 제안", 0.3), line("tlrP", 0.92)], [line("시계", 0.92)]])  # field at the bottom
-    assert calls == [*typed, "ocr", ("key", "cmd+a"), ("key", "backspace"), ("key", "ctrl+space"), ("type", "시계"),
+    assert calls == [*typed, "ocr", ("key", "cmd+a"), ("key", "backspace"), ("key", "capslock"), ("type", "시계"),
                      ("settled", 1.5), "ocr"]
     assert agent.steps[-1]["retyped"] is True and "retyped" in META and agent._retype is None
     assert _key(agent.steps[-1]) == {"action": "spotlight", "text": "시계"}
@@ -1242,7 +1242,7 @@ def test_spotlight_korean_mistyped_is_typed_again_at_the_next_rounds_ocr_read():
     # M5-3, the other direction: English typed while the phone was in Korean shows the keys' Hangul
     agent = run("Safari", [[line("Siri 제안", 0.3), line("ㄴㅁㄹㅁ갸", 0.92)], [line("Safari", 0.92)]])
     assert agent.steps[-1]["retyped"] is True and agent._retype is None
-    assert calls[-6:] == [("key", "cmd+a"), ("key", "backspace"), ("key", "ctrl+space"), ("type", "Safari"),
+    assert calls[-6:] == [("key", "cmd+a"), ("key", "backspace"), ("key", "capslock"), ("type", "Safari"),
                           ("settled", 1.5), "ocr"]
     assert "retyped" not in run("Safari", [[line("safari", 0.92)]]).steps[-1]  # the English is on screen (any case)
     assert "retyped" not in run("Go", [[line("해", 0.92)]]).steps[-1]  # one syllable: too short to look for

@@ -3,7 +3,8 @@
 Once iOS recognizes the board as a hardware keyboard, it reads the keys with the current input language. In Korean
 the 2-set layout composes syllables from these keys exactly as a Korean keyboard does, so typing the key sequence of
 each syllable's jamo reproduces the text (the IME splits a final consonant off again when a vowel follows). Which
-language is active is the phone's state: `key ctrl+space` switches it, and the agent checks the result on screen.
+language is active is the phone's state:
+`key capslock` switches it (iOS "Caps Lock 언어 전환" on), and the agent checks the result on screen.
 
 One run of keys is one language: Latin letters and Hangul cannot share a run, since the keys would come out in the
 wrong alphabet. `script_runs` splits mixed text into Korean and English runs (digits, spaces and the usual symbols

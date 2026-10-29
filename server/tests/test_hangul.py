@@ -142,7 +142,8 @@ def test_phone_can_still_type_spaces_in_korean_in_english(tmp_path):
 
 def test_actor_prompt_explains_input_language_and_fast_clearing():
     from hidagent.agent import ACTOR_PROMPT
-    assert "English, Korean or both" in ACTOR_PROMPT and "key ctrl+space" in ACTOR_PROMPT
+    assert "English, Korean or both" in ACTOR_PROMPT and "key capslock" in ACTOR_PROMPT
+    assert "ctrl+space" not in ACTOR_PROMPT
     assert "cmd+a then key backspace" in ACTOR_PROMPT
     assert "the keyboard is showing" not in ACTOR_PROMPT  # with a hardware keyboard the on-screen one stays hidden
 

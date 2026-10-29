@@ -142,8 +142,8 @@ Actions:
                              switched for you and switched back after; tap the input field first. Look at the
                              field afterwards: if the text came out in the other alphabet (e.g. "ㅁㅠㅊ" for abc,
                              or "tjfwjd" for 설정), the input language is wrong: clear the field (key cmd+a, then
-                             key backspace), switch with key ctrl+space, then type again)
-  key COMBO                 (enter, backspace, esc, cmd+a, ctrl+space = switch the input language between
+                             key backspace), switch with key capslock, then type again)
+  key COMBO                 (enter, backspace, esc, cmd+a, capslock = switch the input language between
                              English and Korean, ...). To clear a field, use key cmd+a then key backspace in one
                              reply, not backspace again and again
   home | back | wait
@@ -773,7 +773,7 @@ class Agent:
         self._acted_at = time.time()
         await self.phone.key("cmd+a")
         await self.phone.key("backspace")
-        await self.phone.key("ctrl+space")
+        await self.phone.key("capslock")  # not ctrl+space: iOS spends the next space on that switch (#95)
         await self.phone.type(plan["text"])
         if self.steps and self.steps[-1].get("action") == "spotlight":
             self.steps[-1]["retyped"] = True
