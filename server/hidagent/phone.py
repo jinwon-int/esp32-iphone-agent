@@ -605,7 +605,9 @@ class Phone:
     # right after one.
     ENGLISH_KEY = "lang2"
     TOGGLE_KEY = "ctrl+space"
-    LANGUAGE_SWITCH_SETTLE = 0.15
+    # 0.15 s was too short: on the device a `key space` sent 0.15 s after `lang2` was dropped every time, the same
+    # space sent seconds later went in (iphone-agent-cast#95, 2026-10-29 note test f77aea029cba vs 3f4354bfc104).
+    LANGUAGE_SWITCH_SETTLE = 0.6
 
     async def type(self, text: str, piece: int = 200) -> None:
         """ASCII as it is; Korean as 2-set layout keys, each space in a Korean run a `key space` typed in English. The
