@@ -115,7 +115,8 @@ def test_phone_types_spaces_in_korean_as_their_own_key(tmp_path):
     asyncio.run(phone.type("이름을 스크린샷 분류로 변경"))
     sent = phone.device.sent
     assert sent[:2] == ["key lang2", "key ctrl+space"] and sent[-1] == "key lang2"
-    assert [c for c in sent if c.startswith("type ")] == ["type dlfmadmf", "type tmzmflstit", "type qnsfbfh", "type qusrud"]
+    typed = [c for c in sent if c.startswith("type ")]
+    assert typed == ["type dlfmadmf", "type tmzmflstit", "type qnsfbfh", "type qusrud"]
     assert sent.count("key space") == 3 and not any(c.startswith("type ") and " " in c[5:] for c in sent)
     phone = make_phone(tmp_path)
     asyncio.run(phone.type(" 가  나 "))
