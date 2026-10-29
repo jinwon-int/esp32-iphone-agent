@@ -165,3 +165,22 @@ def test_language_switch_waits_long_enough_for_ios():
     # a key 0.15 s after a switch was dropped on the device; seconds later it went in (iphone-agent-cast#95)
     from hidagent.phone import Phone
     assert Phone.LANGUAGE_SWITCH_SETTLE >= 0.5
+
+
+def test_korean_waits_between_lang2_and_capslock(tmp_path, monkeypatch):
+    # capslock right after lang2 was dropped on the device (0.7.14, 905186585901): a settle between them
+    events = []
+
+    async def sleep(s):
+        events.append(f"sleep {s}")
+    monkeypatch.setattr("hidagent.phone.asyncio.sleep", sleep)
+    phone = make_phone(tmp_path)
+    orig = phone.device.send
+
+    async def send(c):
+        events.append(c)
+        return await orig(c)
+    phone.device.send = send
+    asyncio.run(phone.type("가"))
+    settle = f"sleep {phone.LANGUAGE_SWITCH_SETTLE}"
+    assert events[:4] == ["key lang2", settle, "key capslock", settle]
