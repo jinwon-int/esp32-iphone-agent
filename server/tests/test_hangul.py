@@ -140,3 +140,9 @@ def test_absolute_pointer_parks_after_a_tap_and_a_drag_not_after_typing(tmp_path
     phone.device.sent.clear()
     asyncio.run(phone.type("abc"))
     assert phone.device.sent == ["key lang2", "type abc"]  # the language key, then the text; no park
+
+
+def test_language_switch_waits_long_enough_for_ios():
+    # a key 0.15 s after a switch was dropped on the device; seconds later it went in (iphone-agent-cast#95)
+    from hidagent.phone import Phone
+    assert Phone.LANGUAGE_SWITCH_SETTLE >= 0.5
