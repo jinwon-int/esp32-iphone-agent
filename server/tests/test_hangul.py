@@ -103,25 +103,22 @@ def test_phone_types_mixed_text_run_by_run_setting_the_input_language(tmp_path):
     assert phone.device.sent == ["key lang2", "key ctrl+space", "type ryqh", "key lang2", "type eBook"]
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("설정 Wi-Fi 켜기"))  # three runs; the last is Korean, so English is restored at the end
-    assert phone.device.sent == ["key lang2", "key ctrl+space", "type tjfwjd", "key space", "key lang2", "type Wi-Fi ",
-                                 "key lang2", "key ctrl+space", "type zurl", "key lang2"]
+    assert phone.device.sent == ["key lang2", "key ctrl+space", "type tjfwjd", "key lang2", "key space", "key lang2",
+                                 "type Wi-Fi ", "key lang2", "key ctrl+space", "type zurl", "key lang2"]
 
 
-def test_phone_types_spaces_in_korean_as_their_own_key(tmp_path):
-    # device 2026-10-29 (iphone-agent-cast#95, run 823bcdd5a351): `type` of a whole Korean sentence dropped spaces
-    # (`이름을스크린샷분류로 변경`, Jev spaces_dropped 11 of 22), word by word with `key space` typed it right
-    # (1113f8c879c5). Leading, trailing and repeated spaces each stay one key; English runs are unchanged.
+def test_phone_types_spaces_in_korean_in_english(tmp_path):
+    # device 2026-10-29 (iphone-agent-cast#95): a space right after a syllable with a final consonant was spent on
+    # finishing it -- `이름을스크린샷분류로 변경`, with or without a separate `key space` (823bcdd5a351, 89461b311763).
+    # lang2 finishes the syllable, the space goes in English, Korean comes back for the next word.
     phone = make_phone(tmp_path)
     asyncio.run(phone.type("이름을 스크린샷 분류로 변경"))
-    sent = phone.device.sent
-    assert sent[:2] == ["key lang2", "key ctrl+space"] and sent[-1] == "key lang2"
-    typed = [c for c in sent if c.startswith("type ")]
-    assert typed == ["type dlfmadmf", "type tmzmflstit", "type qnsfbfh", "type qusrud"]
-    assert sent.count("key space") == 3 and not any(c.startswith("type ") and " " in c[5:] for c in sent)
+    k, e, sp = ["key lang2", "key ctrl+space"], ["key lang2"], ["key space"]
+    assert phone.device.sent == (k + ["type dlfmadmf"] + e + sp + k + ["type tmzmflstit"] + e + sp + k
+                                 + ["type qnsfbfh"] + e + sp + k + ["type qusrud"] + e)
     phone = make_phone(tmp_path)
-    asyncio.run(phone.type(" 가  나 "))
-    assert phone.device.sent == ["key lang2", "key ctrl+space", "key space", "type rk", "key space", "key space",
-                                 "type sk", "key space", "key lang2"]
+    asyncio.run(phone.type(" 가  나 "))  # leading, repeated and trailing spaces: one key each, all in English
+    assert phone.device.sent == (k + e + sp + k + ["type rk"] + e + sp + sp + k + ["type sk"] + e + sp)
 
 
 def test_actor_prompt_explains_input_language_and_fast_clearing():
