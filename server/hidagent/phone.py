@@ -667,6 +667,9 @@ class Phone:
         language."""
         await self.device.send(f"key {self.ENGLISH_KEY}")
         if korean:
+            # capslock right after lang2 is dropped like any key after a switch (0.7.14: Korean came out as
+            # `tjfwjd`, 905186585901; 56d9d16fb32a) -- ctrl+space was not, so 0.7.14 sent them back to back
+            await asyncio.sleep(self.LANGUAGE_SWITCH_SETTLE)
             await self.device.send(f"key {self.TOGGLE_KEY}")
         await asyncio.sleep(self.LANGUAGE_SWITCH_SETTLE)
 
