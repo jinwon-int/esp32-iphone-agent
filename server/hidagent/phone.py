@@ -608,9 +608,16 @@ class Phone:
     # 0.15 s was too short: on the device a `key space` sent 0.15 s after `lang2` was dropped every time, the same
     # space sent seconds later went in (iphone-agent-cast#95, 2026-10-29 note test f77aea029cba vs 3f4354bfc104).
     LANGUAGE_SWITCH_SETTLE = 0.6
+    # A space inside Korean is typed in Korean, after a short pause: a person types "을 " without switching, and the
+    # spaces lost in 0.7.9 (`key space` right after the last syllable's keys, 89461b311763) look like the same
+    # "too fast" as the language switch (iphone-agent-cast#95, 2026-10-29). korean_space_switch=True keeps the
+    # 0.7.12 way (switch to English for the space, then back) that typed it right but costs ~1.2 s per space.
+    KOREAN_SPACE_GAP = 0.3
+    korean_space_switch = False
 
     async def type(self, text: str, piece: int = 200) -> None:
-        """ASCII as it is; Korean as 2-set layout keys, each space in a Korean run a `key space` typed in English. The
+        """ASCII as it is; Korean as 2-set layout keys, each space in a Korean run a `key space` after a short pause
+        (or typed in English with korean_space_switch). The
         input language is set, not guessed: `lang2` before an English run (always English), `lang2` then
         `ctrl+space` before a Korean run, and `lang2` at the end so the phone is left in English -- whatever it was
         in before (iphone-agent-cast#95)."""
@@ -635,9 +642,12 @@ class Phone:
             words = part.split(" ") if korean_now else [part]
             for w, word in enumerate(words):
                 if w:
-                    if korean_now:
-                        await self._select_language(False)
-                        korean_now = False
+                    if self.korean_space_switch:
+                        if korean_now:
+                            await self._select_language(False)
+                            korean_now = False
+                    else:
+                        await asyncio.sleep(self.KOREAN_SPACE_GAP)
                     await self.device.send("key space")
                 if word and runs[n][0] and not korean_now:
                     await self._select_language(True)
