@@ -24,14 +24,18 @@ started ahead and left waiting on stdin sends it **0.045 s** after (3 runs each;
 through the adapter (`haiku`, 4 requests each), request time minus `api_ms` went from **1.54–1.60 s** (fresh) to
 **0.58–0.81 s** (prewarmed).
 
-So after each request the adapter starts the next process for the same command — model, effort and system prompt —
-and leaves it waiting. The next request with that command uses it (`warm=1`); any other runs fresh as before (`warm=0`)
-and leaves one waiting for itself. At most `ADAPTER_PREWARM_MAX` wait at once (the oldest is ended first); one that
-waited `ADAPTER_PREWARM_MAX_AGE` seconds, or died, is ended (swept every 30 s), so an idle phone leaves nothing
-running. The Cast app sends three fixed system prompts (`AgentPrompts.planner`, `.actor`, `.check`), so at most three
-wait during a session. A waiting process is ~220 MB RSS and ends by itself when the adapter exits (its stdin closes). A failed
-prewarm start never fails a request. `ADAPTER_PREWARM=0` is the previous behaviour exactly (one `subprocess.run` per
-request) — the rollback without a code change.
+So after each request (once its reply is in hand) the adapter starts the next process for the same command — model,
+effort and system prompt — and leaves it waiting. The next request with that command uses it (`warm=1`); any other
+runs fresh as before (`warm=0`) and leaves one waiting for itself. At most `ADAPTER_PREWARM_MAX` wait at once (the
+oldest is ended first); one that waited `ADAPTER_PREWARM_MAX_AGE` seconds, or died, is ended (swept every 30 s), so an
+idle phone leaves nothing running. The Cast app sends three fixed system prompts (`AgentPrompts.planner`, `.actor`,
+`.check`), so at most three wait during a session. A waiting process is ~220 MB RSS, writes nothing while it waits
+(332 s measured) and ends by itself when the adapter exits (its stdin closes); one that still answered after 240 s of
+waiting was measured. Processes are ended with stdin closed and SIGTERM first, SIGKILL only after 5 s: SIGKILL alone
+leaves `~/.claude/sessions/<pid>.*` and a `cc-socks` socket behind (#116 review). A waiting process that died is
+retried fresh, and a failed prewarm start never fails a request. `ADAPTER_PREWARM=0` (or
+`ADAPTER_PREWARM_MAX_AGE<=0`) runs one `subprocess.run` per request as before — only the log line gains `warm=0`
+and the timings — the rollback without a code change.
 
 ## Model and effort
 

@@ -41,9 +41,20 @@ SHOT_DIR = os.environ.get("ADAPTER_SHOT_DIR", "").strip()  # "" = screen images 
 SHOT_DAYS = float(os.environ.get("ADAPTER_SHOT_DAYS", "7"))
 SHOT_PRUNE_EVERY = 3600.0  # seconds between sweeps for images older than SHOT_DAYS
 SHOT_SUFFIX = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
-PREWARM = os.environ.get("ADAPTER_PREWARM", "1").strip().lower() not in ("0", "off", "no", "false", "")
-PREWARM_MAX = max(1, int(os.environ.get("ADAPTER_PREWARM_MAX", "4")))
-PREWARM_MAX_AGE = float(os.environ.get("ADAPTER_PREWARM_MAX_AGE", "300"))
+
+
+def env_number(name, default, cast):
+    """A numeric setting; a malformed value falls back to the default instead of stopping the adapter."""
+    try:
+        return cast(os.environ.get(name, default))
+    except ValueError:
+        return cast(default)
+
+
+PREWARM_MAX = max(1, env_number("ADAPTER_PREWARM_MAX", "4", int))
+PREWARM_MAX_AGE = env_number("ADAPTER_PREWARM_MAX_AGE", "300", float)
+PREWARM = (os.environ.get("ADAPTER_PREWARM", "1").strip().lower() not in ("0", "off", "no", "false", "")
+           and PREWARM_MAX_AGE > 0)
 _shots = threading.Lock()
 _last_prune = [0.0]
 
@@ -152,18 +163,38 @@ def spawn(cmd):
 
 
 def end(proc):
+    """Stop a `claude -p` so it can clean up after itself: close its stdin and send SIGTERM, then SIGKILL only if it
+    is still there after 5 s. SIGKILL alone leaves ~/.claude/sessions/<pid>.* and a cc-socks socket behind (#116)."""
+    try:
+        if proc.stdin and not proc.stdin.closed:
+            proc.stdin.close()
+    except Exception:  # noqa: BLE001 - a broken pipe means it is already going
+        pass
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+        return
+    except Exception:  # noqa: BLE001 - gone already, or did not stop in time
+        pass
     try:
         proc.kill()
         proc.wait(timeout=5)
-    except Exception:  # noqa: BLE001 - already gone, or will be reaped by the unit's cgroup
+    except Exception:  # noqa: BLE001 - will be reaped by the unit's cgroup
         pass
+
+
+def retire(procs):
+    """End processes off the request path (end() may wait up to 5 s each)."""
+    procs = [p for p in procs if p is not None]
+    if procs:
+        threading.Thread(target=lambda: [end(p) for p in procs], daemon=True).start()
 
 
 class Warm:
     """Idle `claude -p` processes started ahead of the request that will use them, one per command."""
 
     def __init__(self, start=None, most=PREWARM_MAX, max_age=PREWARM_MAX_AGE, clock=time.monotonic):
-        self._start, self._most, self._max_age, self._clock = start or spawn, most, max_age, clock
+        self._start, self._most, self._max_age, self._clock = start or spawn, max(1, most), max_age, clock
         self._lock, self._idle = threading.Lock(), {}  # tuple(cmd) -> (process, started at)
 
     def take(self, cmd):
@@ -175,7 +206,7 @@ class Warm:
         proc, born = entry
         if proc.poll() is None and self._clock() - born < self._max_age:
             return proc
-        end(proc)
+        retire([proc])
         return None
 
     def refill(self, cmd):
@@ -194,8 +225,7 @@ class Warm:
                 oldest = min(self._idle, key=lambda k: self._idle[k][1])
                 gone.append(self._idle.pop(oldest)[0])
             self._idle[tuple(cmd)] = (proc, self._clock())
-        for p in gone:
-            end(p)
+        retire(gone)
 
     def reap(self):
         """End processes that waited longer than `max_age` (or died); returns how many went."""
@@ -203,8 +233,7 @@ class Warm:
         with self._lock:
             stale = [k for k, (p, born) in self._idle.items() if now - born >= self._max_age or p.poll() is not None]
             gone = [self._idle.pop(k)[0] for k in stale]
-        for p in gone:
-            end(p)
+        retire(gone)
         return len(gone)
 
     def size(self):
@@ -218,7 +247,10 @@ WARM = Warm() if PREWARM else None
 def reap_forever(warm, every=30.0):
     while True:
         time.sleep(every)
-        warm.reap()
+        try:
+            warm.reap()
+        except Exception as e:  # noqa: BLE001 - keep sweeping; take() refuses stale processes meanwhile
+            log(f"prewarm sweep failed: {type(e).__name__}")
 
 
 def result_of(stdout, returncode):
@@ -249,16 +281,26 @@ def ask(system, blocks, model, effort="", warm=None):
             return text, usage, dict(info, warm=False)
         proc = warm.take(cmd)
         was_warm = proc is not None
-        if proc is None:
-            proc = spawn(cmd)
-        warm.refill(cmd)  # the next one boots while this one waits on the model
         try:
-            out, _ = proc.communicate(input=line, timeout=TIMEOUT)
-        except subprocess.TimeoutExpired:
-            end(proc)
-            raise
-        text, usage, info = result_of(out, proc.returncode)
+            out, rc = send(proc or spawn(cmd), line)
+            if was_warm and not out.strip():  # it died while waiting (killed, OOM): run this one fresh
+                log("prewarmed process gave no output; running fresh")
+                was_warm = False
+                out, rc = send(spawn(cmd), line)
+            text, usage, info = result_of(out, rc)
+        finally:
+            warm.refill(cmd)  # after the reply is in hand, so it does not compete with a cold start
         return text, usage, dict(info, warm=was_warm)
+
+
+def send(proc, line):
+    """Give a started process its one input line; returns (stdout, return code)."""
+    try:
+        out, _ = proc.communicate(input=line, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        retire([proc])
+        raise
+    return out, proc.returncode
 
 
 class Handler(BaseHTTPRequestHandler):

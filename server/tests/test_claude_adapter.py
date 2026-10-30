@@ -172,10 +172,20 @@ RESULT = json.dumps({"type": "result", "subtype": "success", "result": "DO: home
                      "usage": {"output_tokens": 3}, "duration_ms": 2100, "duration_api_ms": 1900}) + "\n"
 
 
+class FakeStdin:
+    def __init__(self, proc):
+        self.proc, self.closed = proc, False
+
+    def close(self):
+        self.closed = True
+        self.proc.events.append("stdin-close")
+
+
 class FakeProc:
-    def __init__(self, cmd, out=RESULT, rc=0, alive=True, hang=False):
+    def __init__(self, cmd, out=RESULT, rc=0, alive=True, hang=False, stubborn=False):
         self.cmd, self.out, self.returncode, self.alive, self.hang = cmd, out, rc, alive, hang
-        self.killed, self.sent = False, None
+        self.stubborn, self.killed, self.sent, self.events = stubborn, False, None, []
+        self.stdin = FakeStdin(self)
 
     def poll(self):
         return None if self.alive and not self.killed else self.returncode
@@ -184,12 +194,20 @@ class FakeProc:
         if self.hang and not self.killed:
             raise subprocess.TimeoutExpired(self.cmd, timeout)
         self.sent = input
-        return self.out, ""
+        return (self.out if self.alive else ""), ""
+
+    def terminate(self):
+        self.events.append("terminate")
+        if not self.stubborn:
+            self.killed = True
 
     def kill(self):
+        self.events.append("kill")
         self.killed = True
 
     def wait(self, timeout=None):
+        if not self.killed:
+            raise subprocess.TimeoutExpired(self.cmd, timeout)
         return self.returncode
 
 
@@ -205,8 +223,19 @@ def spawned(adapter, monkeypatch):
         return procs[-1]
 
     monkeypatch.setattr(adapter, "spawn", fake_spawn)
+    monkeypatch.setattr(adapter, "retire", lambda ps: [adapter.end(p) for p in ps if p is not None])  # inline
     monkeypatch.setattr(adapter.subprocess, "run", lambda *a, **k: pytest.fail("prewarm must not use run"))
     return procs
+
+
+def test_end_lets_the_cli_clean_up_before_it_kills(adapter):
+    """SIGKILL alone leaves ~/.claude/sessions/<pid>.* behind: stdin is closed and SIGTERM sent first (#116 review)."""
+    calm = FakeProc([])
+    adapter.end(calm)
+    assert calm.events == ["stdin-close", "terminate"] and calm.stdin.closed
+    stubborn = FakeProc([], stubborn=True)
+    adapter.end(stubborn)
+    assert stubborn.events == ["stdin-close", "terminate", "kill"]
 
 
 def test_prewarm_uses_the_waiting_process_and_starts_the_next(adapter, spawned):
@@ -248,7 +277,8 @@ def test_prewarm_timeout_ends_the_process_and_a_failed_start_is_not_fatal(adapte
     spawned[0].hang = True
     with pytest.raises(subprocess.TimeoutExpired):
         adapter.ask("S", [], "sonnet", "", warm=warm)
-    assert spawned[0].killed
+    assert spawned[0].killed and spawned[0].events[:2] == ["stdin-close", "terminate"]
+    assert warm.size() == 1  # the next one is started even after a timeout
 
     def broken(cmd):
         raise OSError("no claude")
@@ -272,3 +302,34 @@ def test_prewarm_is_on_by_default_and_env_switches_it_off(tmp_path, monkeypatch)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         assert (mod.WARM is not None) is on
+
+
+def test_a_waiting_process_that_died_is_retried_fresh(adapter, spawned):
+    warm = adapter.Warm(start=adapter.spawn, most=4, max_age=300, clock=lambda: 0.0)
+    warm.refill(adapter.command("S", "sonnet"))
+    spawned[0].alive = False  # dies after take() saw it alive
+    spawned[0].poll = lambda: None
+    text, _, info = adapter.ask("S", [], "sonnet", "", warm=warm)
+    assert text == "DO: home" and info["warm"] is False and len(spawned) == 3  # dead, fresh retry, next waiting
+
+
+def test_prewarm_limits_are_guarded(adapter, tmp_path, monkeypatch):
+    import importlib.util
+    warm = adapter.Warm(start=lambda cmd: FakeProc(cmd), most=0, max_age=300, clock=lambda: 0.0)
+    warm.refill(["a"])
+    warm.refill(["b"])
+    assert warm.size() == 1  # most=0 means one, not a crash
+    token = tmp_path / "token"
+    token.write_text("t\n")
+    monkeypatch.setenv("ADAPTER_TOKEN_FILE", str(token))
+    for env, on, most in (({"ADAPTER_PREWARM_MAX_AGE": "0"}, False, 4),
+                          ({"ADAPTER_PREWARM_MAX": "lots", "ADAPTER_PREWARM_MAX_AGE": "x"}, True, 4),
+                          ({"ADAPTER_PREWARM_MAX": "2"}, True, 2)):
+        for k in ("ADAPTER_PREWARM", "ADAPTER_PREWARM_MAX", "ADAPTER_PREWARM_MAX_AGE"):
+            monkeypatch.delenv(k, raising=False)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        spec = importlib.util.spec_from_file_location("claude_adapter_prewarm_limits", ADAPTER)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert (mod.WARM is not None) is on and mod.PREWARM_MAX == most
