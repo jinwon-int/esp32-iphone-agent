@@ -13,7 +13,29 @@ What it does, per request:
   working directory (no user hooks or settings), `--no-session-persistence`. The OAuth token is never read or
   copied: the CLI uses its own login.
 - Replies with the last `result` event as `choices[0].message.content` and the usage counts.
-- Logs timing and counts only — never prompt text or images.
+- Logs timing and counts only — never prompt text or images. The `ok` line also carries `warm=1|0` (prewarmed
+  process or not) and the CLI's own `cli_ms` / `api_ms` from the `result` event, so start-up cost stays measurable.
+
+## Prewarm (iphone-agent-cast#136)
+
+Starting `claude -p` costs time before the model is even asked. Measured on the node (2026-10-31, `/usr/bin/claude`,
+the adapter's exact flags): a fresh process sends its first API request **0.77 s** after its input arrives; one that was
+started ahead and left waiting on stdin sends it **0.045 s** after (3 runs each; also after 10 s of waiting). End to end
+through the adapter (`haiku`, 4 requests each), request time minus `api_ms` went from **1.54–1.60 s** (fresh) to
+**0.58–0.81 s** (prewarmed).
+
+So after each request (once its reply is in hand) the adapter starts the next process for the same command — model,
+effort and system prompt — and leaves it waiting. The next request with that command uses it (`warm=1`); any other
+runs fresh as before (`warm=0`) and leaves one waiting for itself. At most `ADAPTER_PREWARM_MAX` wait at once (the
+oldest is ended first); one that waited `ADAPTER_PREWARM_MAX_AGE` seconds, or died, is ended (swept every 30 s), so an
+idle phone leaves nothing running. The Cast app sends three fixed system prompts (`AgentPrompts.planner`, `.actor`,
+`.check`), so at most three wait during a session. A waiting process is ~220 MB RSS, writes nothing while it waits
+(332 s measured) and ends by itself when the adapter exits (its stdin closes); one that still answered after 240 s of
+waiting was measured. Processes are ended with stdin closed and SIGTERM first, SIGKILL only after 5 s: SIGKILL alone
+leaves `~/.claude/sessions/<pid>.*` and a `cc-socks` socket behind (#116 review). A waiting process that died is
+retried fresh, and a failed prewarm start never fails a request. `ADAPTER_PREWARM=0` (or
+`ADAPTER_PREWARM_MAX_AGE<=0`) runs one `subprocess.run` per request as before — only the log line gains `warm=0`
+and the timings — the rollback without a code change.
 
 ## Model and effort
 
@@ -45,6 +67,9 @@ the default.
 | `ADAPTER_EFFORT` | (unset) | default effort, see above |
 | `ADAPTER_SHOT_DIR` | (unset) | keep every screen image here (folder 0700, images 0600, `shot-<time>-<id>-<n>.jpg`); unset = not kept |
 | `ADAPTER_SHOT_DAYS` | `7` | kept images older than this are deleted (swept at most once an hour, only `shot-*` files) |
+| `ADAPTER_PREWARM` | `1` | start the next `claude -p` ahead (see Prewarm); `0` = one fresh process per request |
+| `ADAPTER_PREWARM_MAX` | `4` | most processes waiting at once (one per command) |
+| `ADAPTER_PREWARM_MAX_AGE` | `300` | seconds a process may wait before it is ended |
 
 Only the images are written — no prompt text, no replies. Keep the folder on the node itself; it holds what was on
 the phone's screen (owner decision 2026-10-23: kept on the node for a week so a run can be looked at afterwards).
@@ -84,4 +109,5 @@ the 2026-10-22 deployment added the effort rules above. Wiki: the node's CHANGES
 ## Tests
 
 `tests/test_claude_adapter.py` pins the model/effort rules, the content blocks and the exact `claude -p` command
-(no CLI is run: `subprocess.run` is replaced).
+(no CLI is run: `subprocess.run` is replaced), and prewarm: reuse, refill, the age/count/death limits, timeouts and a
+failed start (`spawn` is replaced).
