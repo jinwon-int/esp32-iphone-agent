@@ -601,3 +601,36 @@ def test_a_relative_pointer_flicks_as_a_drag_with_the_same_rests(tmp_path, monke
     asyncio.run(phone.flick(0.92, 0.5, 0.08, 0.5))
     i = log.sent.index("press")
     assert log.sent[i + 1] == "sleep 0.35" and log.sent[-2:] == ["sleep 0.15", "release"]
+
+
+def _calibrate_with(tmp_path, found):
+    """start_calibration against a live screen whose pointer search returns the scripted results in turn."""
+    phone, device = make_phone(tmp_path, calibrated=False)
+    phone.screen = type("LiveScreen", (), {"live": True})()
+    results = iter(found)
+
+    async def find_pointer():
+        return next(results)
+
+    phone._find_pointer = find_pointer
+    return phone, device, asyncio.run(phone.start_calibration())
+
+
+def test_calibration_found_at_one_stop_puts_the_pointer_back_for_the_click(tmp_path):
+    # #46: found at the first stop only, the pointer was left at the second stop (350) while
+    # finish_calibration assumes CALIBRATION_MOVE (200); it now goes back there as when nothing is found.
+    phone, device, done = _calibrate_with(tmp_path, [(0.3, 0.15), None])
+    assert done is False and phone.span is None
+    assert device.sent == ["home", "move 150 150", "move 200 200", "home", "move 200 200"]
+
+
+def test_calibration_found_at_no_stop_puts_the_pointer_back_for_the_click(tmp_path):
+    phone, device, done = _calibrate_with(tmp_path, [None])
+    assert done is False and phone.span is None
+    assert device.sent == ["home", "move 150 150", "home", "move 200 200"]
+
+
+def test_calibration_found_at_both_stops_fits_the_span(tmp_path):
+    phone, device, done = _calibrate_with(tmp_path, [(0.3, 0.15), (0.7, 0.35)])
+    assert done is True and phone.span == {"w": 500, "h": 1000}
+    assert device.sent == ["home", "move 150 150", "move 200 200"]

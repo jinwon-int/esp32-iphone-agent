@@ -190,10 +190,14 @@ class Phone:
                 break
             seen.append((units, *found))
         if len(seen) < 2:
-            log.info("calibration: pointer not found on screen, waiting for a click")
-            if not seen:
-                await self.device.send("home")
-                await self.device.send(f"move {CALIBRATION_MOVE} {CALIBRATION_MOVE}")
+            # Found at none or only one stop: finish_calibration expects the pointer at the CALIBRATION_MOVE
+            # point, so put it back there either way (#46 — a half-found run left it at the second stop).
+            if seen:
+                log.info("calibration: pointer found at 1 of 2 stops, waiting for a click")
+            else:
+                log.info("calibration: pointer not found on screen, waiting for a click")
+            await self.device.send("home")
+            await self.device.send(f"move {CALIBRATION_MOVE} {CALIBRATION_MOVE}")
             return False
         (u1, x1, y1), (u2, x2, y2) = seen
         self.span = {"w": round((u2 - u1) / (x2 - x1)), "h": round((u2 - u1) / (y2 - y1))}
