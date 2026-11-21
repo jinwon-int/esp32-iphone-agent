@@ -35,7 +35,8 @@ jobs:
       - uses: arduino/setup-arduino-cli@v2
       - run: |
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
-          arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          # Pinned: esp32 core 4.0.0 drops mbedtls_md_hmac (hid_bridge.ino), and the boards are flashed with 3.3.12.
+          arduino-cli core install esp32:esp32@3.3.12 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
       - name: Build (8 MB flash, e.g. XIAO ESP32S3, and 4 MB, e.g. ESP32-S3-Zero; relative mouse and absolute pointer)
         working-directory: hardware
         run: |
