@@ -161,7 +161,7 @@ class PushScreen(Frames):
             log.warning("push connection from %s refused: %s", host, e)
             await self._reject(writer, "401 Unauthorized")
             return
-        except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError) as e:
+        except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError, asyncio.LimitOverrunError) as e:
             log.warning("push connection from %s refused: %s", host, str(e)[:120] or type(e).__name__)
             await self._reject(writer, "400 Bad Request")
             return

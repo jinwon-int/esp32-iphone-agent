@@ -73,7 +73,7 @@ class Device:
         self._waiting[writer] = None
         try:
             hello, session = await asyncio.wait_for(self._handshake(reader, writer), self.handshake_timeout)
-        except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError, AuthError) as e:
+        except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError, AuthError) as e:
             # a stranger (or a board with the wrong key / old firmware) never replaces the board in use;
             # ValueError covers undecodable bytes and over-long lines
             log.warning("board connection from %s refused: %s", peer, str(e)[:120] or type(e).__name__)
@@ -153,7 +153,7 @@ class Device:
                 writer.write(f"{command} {auth.tag(session, 'cmd', seq, command)}\n".encode())
                 await writer.drain()
                 raw = (await asyncio.wait_for(reader.readline(), timeout)).decode().strip()
-            except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError) as e:
+            except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError) as e:
                 writer.close()  # the board reconnects on its own within a few seconds
                 raise DeviceError(f"board link lost during '{command[:30]}': {e!r}") from e
             except asyncio.CancelledError:
